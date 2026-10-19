@@ -1,21 +1,21 @@
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:
-    provider: d1api
-    model: deepseek-v4.1-flash
+    provider: compatible
+    model: YOUR_MODEL
     reasoningEffort: high
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
     providers:
-      d1api:
-        displayName: D1api
-        apiKeyEnv: D1API_API_KEY
+      compatible:
+        displayName: Compatible
+        apiKeyEnv: NEWSPAPER_API_KEY
         api: openai-completions
-        baseURL: https://d1api.xin/v1/
+        baseURL: https://api.example.com/v1/
         models:
-          - id: deepseek-v4.1-flash
-            name: deepseek-v4.1-flash
+          - id: YOUR_MODEL
+            name: YOUR_MODEL
             input: [text]
             contextWindow: 1000000
             maxTokens: 12000

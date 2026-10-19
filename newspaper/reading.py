@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from .config import TZ
 
@@ -23,12 +24,13 @@ def source_label(url: str) -> str:
     return host
 
 
-def display_time(value: str, pattern: str = '%m月%d日 %H:%M') -> str:
+def display_time(value: str, pattern: str = '%m月%d日 %H:%M', timezone=TZ) -> str:
     moment = datetime.fromisoformat(value)
-    return moment.astimezone(TZ).strftime(pattern)
+    return moment.astimezone(timezone).strftime(pattern)
 
 
-def report_view(doc: dict, key: str) -> dict:
+def report_view(doc: dict, key: str, settings=None) -> dict:
+    timezone=ZoneInfo(settings.values.get('project',{}).get('timezone',TZ.key)) if settings else TZ
     sources = {s['id']: s for s in doc.get('sources', [])}
     prefix = doc.get('edition', 'daily')
     sections = []
@@ -47,14 +49,16 @@ def report_view(doc: dict, key: str) -> dict:
             paragraphs = list(dict.fromkeys(f['text'].strip() for f in article['facts'] if f['text'].strip()))
             # Evidence claims need not be reader-facing paragraph boundaries.
             limit=6 if section['id']=='science' else 4 if article.get('importance')=='重大' else 3
+            fmt=next((s.get('format',{}) for s in settings.sections if s['id']==section['id']),{}) if settings else {}
+            limit=fmt.get('max_major_paragraphs' if article.get('importance')=='重大' else 'max_paragraphs',limit)
             if len(paragraphs)>limit:
                 size=(len(paragraphs)+limit-1)//limit
                 paragraphs=[' '.join(paragraphs[i:i+size]) for i in range(0,len(paragraphs),size)]
             articles.append({**article, 'anchor': f'{prefix}-s{si}-a{ai}',
                 'paragraphs': paragraphs or [article['summary']], 'references': list(references.values()),
-                'time': display_time(article['published_at'])})
+                'time': display_time(article['published_at'],timezone=timezone)})
         sections.append({'name': section['name'], 'anchor': f'{prefix}-s{si}', 'articles': articles})
     return {'key': key, 'date': doc['date'], 'title': doc['title'], 'sections': sections,
             'count': sum(len(s['articles']) for s in sections),
-            'window': (display_time(doc['window_start']) + ' — ' + display_time(doc['window_end']))
+            'window': (display_time(doc['window_start'],timezone=timezone) + ' — ' + display_time(doc['window_end'],timezone=timezone))
                       if doc.get('window_start') else ''}

@@ -26,7 +26,7 @@ class NewspaperTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.day = utcnow().date().isoformat()
-        self.settings = Settings({"model": {"provider": "d1api", "id": "deepseek-v4.1-flash", "base_url": "https://example.test/v1"},
+        self.settings = Settings({"model": {"provider": "fixture", "id": "fixture-model", "base_url": "https://example.test/v1"},
             "sections": [{"id": "fixture", "name": "测试板块"}],
             "notifications": {"email": {"enabled": True}, "telegram": {"enabled": True}}},
             self.root / "data", self.root / "web", "https://example.test")

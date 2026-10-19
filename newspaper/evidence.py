@@ -60,6 +60,8 @@ def validate_selection(selection: dict, settings, sources: list[dict], limit: in
         raise ValueError('Invalid candidate budget')
     # A model may return discarded low-priority items for completeness; never publish them.
     candidates = [c for c in candidates if c.get('importance') != '一般']
+    rules={s['id']:s.get('filter',{}) for s in settings.sections}
+    candidates = [c for c in candidates if c.get('importance') in rules.get(c.get('section_id'),{}).get('importance',['重大','重要'])]
     candidates.sort(key=lambda c: 0 if c.get('importance') == '重大' else 1)
     candidates = candidates[:limit]
     ids = {s['id'] for s in sources}

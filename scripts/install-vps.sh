@@ -11,6 +11,9 @@ usermod -a -G caddy newspaper
 if [ ! -f /etc/newspaper/config.toml ]; then
   install -o root -g newspaper -m 640 config.example.toml /etc/newspaper/config.toml
 fi
+if [ ! -f /etc/newspaper/project.local.toml ]; then
+  install -o root -g newspaper -m 640 project.example.toml /etc/newspaper/project.local.toml
+fi
 if [ ! -f /etc/newspaper/credentials.env ]; then
   install -o root -g newspaper -m 640 .env.example /etc/newspaper/credentials.env
 fi

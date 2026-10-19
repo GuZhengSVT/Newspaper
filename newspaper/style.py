@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 
 
-def style_issues(doc: dict) -> list[dict]:
+def style_issues(doc: dict, settings=None) -> list[dict]:
     issues = []
     for section in doc['sections']:
         for article in section['articles']:
@@ -13,6 +13,10 @@ def style_issues(doc: dict) -> list[dict]:
                 paragraphs, characters = 4, 650
             else:
                 paragraphs, characters = 3, 420
+            fmt=next((s.get('format',{}) for s in settings.sections if s['id']==section['id']),{}) if settings else {}
+            major=article.get('importance')=='重大'
+            characters=fmt.get('max_major_characters' if major else 'max_characters',characters)
+            paragraphs=fmt.get('max_major_paragraphs' if major else 'max_paragraphs',paragraphs)
             actual = sum(len(f['text']) for f in article['facts'])
             if actual > characters:
                 issues.append({'event_key': article['event_key'], 'max_paragraphs': paragraphs,

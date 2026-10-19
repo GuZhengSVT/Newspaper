@@ -19,3 +19,8 @@ dist/
 build/
 .coverage
 .DS_Store
+*.local.toml
+*.local.md
+project.toml
+private/
+public-export/

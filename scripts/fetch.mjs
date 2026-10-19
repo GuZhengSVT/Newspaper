@@ -17,7 +17,8 @@ export function publicAddress(address) {
 async function main() {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
-  const {url} = JSON.parse(input);
+  const {url, max_chars = 200000} = JSON.parse(input);
+  if (!Number.isInteger(max_chars) || max_chars < 1 || max_chars > 2000000) throw Error('Invalid page budget');
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port && parsed.port !== '443') throw Error('Invalid source URL');
   const addresses = await lookup(parsed.hostname.replace(/^\[|\]$/g, ''), {all:true});
@@ -28,7 +29,10 @@ async function main() {
   const provider = createFetchProvider({resolveApiKey: async name => process.env[name] || undefined, logger:{warn(){}}});
   const result = await provider.fetch({url}, AbortSignal.timeout(30000));
   if (result.statusCode >= 400) throw Error('Source fetch failed');
-  process.stdout.write(JSON.stringify({kind:result.body.kind, content:result.body.content.slice(0,200000)}));
+  const content = result.body.content;
+  // Never silently turn a truncated XML feed into an apparently empty HTML index.
+  if (content.length > max_chars && /<(?:(?:\w+:)?rss|feed|rdf:RDF)\b/i.test(content.slice(0,1000))) throw Error('Feed exceeds page budget');
+  process.stdout.write(JSON.stringify({kind:result.body.kind, content:content.slice(0,max_chars)}));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

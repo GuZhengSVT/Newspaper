@@ -26,15 +26,39 @@ from .validation import SCHEMA, validate_report, normalize
 def generate(settings: Settings, store: Store, notify: bool = True, cutoff: datetime | None = None) -> dict:
     """Both editions share a bounded in-run source cache; publications are independent."""
     if cutoff is not None:
-        now = utcnow()
+        now = utcnow().astimezone(settings.timezone)
         if cutoff.tzinfo is None:
             raise ValueError("Cutoff requires an explicit timezone")
-        cutoff = cutoff.astimezone(TZ)
-        if cutoff.date() != now.date() or cutoff > now or cutoff.hour < 12:
+        cutoff = cutoff.astimezone(settings.timezone)
+        if cutoff.date() != now.date() or cutoff > now or (not settings.values.get('project') and cutoff.hour < 12):
             raise ValueError("Cutoff must be between today's noon and the current time")
     clean(settings, store)
     if not settings.sections:
         return {"state": "awaiting_sections", "date": utcnow().date().isoformat()}
+    if settings.values.get('project') or 'schedule' in settings.values:
+        from .schedule import jobs
+        from .batches import prepare_batches, finish_batches
+        results=[];cache={};scheduled=jobs(settings, utcnow())
+        if cutoff is not None:
+            scheduled=[(e,{**w,'window_end':cutoff.isoformat()} if w['date']==cutoff.date().isoformat() else w) for e,w in scheduled]
+        batch_ids=prepare_batches(settings, store, scheduled) if notify else []
+        for edition, window in scheduled:
+            key=window['date']+'/'+edition['id']
+            now=utcnow().timestamp()
+            failures=store.db.execute("select count(*),max(finished_at) from runs where day=? and status='failed' and started_at>?",
+                                      (key,now-6*3600)).fetchone()
+            if not store.published(key) and (failures[0]>=3 or (failures[1] and now-failures[1]<300)):
+                results.append({'edition':edition['id'],'state':'retry_deferred','date':window['date']})
+                continue
+            try:
+                results.append(generate_edition(settings.for_edition(edition), store, edition, cache, False,
+                                                publication_window=window))
+            except Exception as exc:
+                results.append({'edition':edition['id'],'state':'failed','error_type':type(exc).__name__})
+        state=('partial_failure' if any(r['state']=='failed' for r in results) else
+               'published' if any(r['state']=='published' for r in results) else 'idle')
+        notifications=finish_batches(settings,store,batch_ids) if notify else {}
+        return {'state':state,'date':utcnow().date().isoformat(),'editions':results,**({'notifications':notifications} if notify else {})}
     if utcnow().hour < 12:
         return {"state": "before_scheduled_window", "date": utcnow().date().isoformat()}
     cache = {}
@@ -54,17 +78,22 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
 
 
 def generate_edition(settings: Settings, store: Store, edition: dict, cache: dict, notify: bool,
-                     cutoff: datetime | None = None) -> dict:
+                     cutoff: datetime | None = None, publication_window: dict | None = None) -> dict:
     now = utcnow()
-    day = now.date().isoformat()
+    day = publication_window['date'] if publication_window else now.date().isoformat()
     key = day + ("/" + edition["id"] if edition["id"] else "")
     if store.published(key):
+        store.set_task(key,edition.get("task_id"))
         return {"state": "already_published", "edition": edition["id"], "date": day}
     if store.db.execute("SELECT 1 FROM editions WHERE day=? AND status='ready'", (key,)).fetchone():
+        store.set_task(key,edition.get("task_id"))
         doc = store.document(key)
         evidence = json.loads((settings.data / "editions" / key / "evidence.json").read_text())
+        if (settings.values.get('search', {}).get('mode') == 'bounded' and not evidence['sources']
+            and not evidence.get('collection_status', {}).get('fetched_sources')):
+            raise ValueError('No verified originals in saved edition; refusing a no-news success')
         window = {k: doc[k] for k in ["date", "window_start", "window_end"]}
-        validate_report(doc, settings, evidence["sources"], store.history(), window)
+        validate_report(doc, settings, evidence["sources"], store.history(edition.get("task_id")), window)
         build(store.settings, store)
         store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
         store.db.execute("INSERT INTO runs(day,started_at,finished_at,status,metrics) VALUES(?,?,?,'published',?)",
@@ -77,8 +106,8 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 "url": settings.base_url + "/daily/" + key + "/",
                 **({"notifications": deliver(settings, store)} if notify else {})}
     end = datetime.combine(now.date(), time(12), TZ)
-    window = {"date": day, "window_start": (end - timedelta(days=1)).isoformat(),
-              "window_end": (cutoff or end).isoformat()}
+    window = publication_window or {"date": day, "window_start": (end - timedelta(days=1)).isoformat(),
+                                    "window_end": (cutoff or end).isoformat()}
     cursor = store.db.execute("INSERT INTO runs(day,started_at,status) VALUES(?,?,'running')", (key, now.timestamp()))
     run_id = cursor.lastrowid
     store.db.commit()
@@ -95,9 +124,12 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
             collections = []
             coverage = []
             if settings.values.get("search", {}).get("mode") == "bounded":
-                sources, candidates, coverage, _, search_metrics = bounded_research(settings, client, window, work, cache)
+                sources, candidates, coverage, _, search_metrics = bounded_research(settings, client, window, work, cache,
+                                                                                  diagnostics=metrics)
                 metrics.update(search_metrics, dsh_tokens=0)
-                history = store.related_history(candidates)
+                if not sources:
+                    raise ValueError('No originals verified; refusing a no-news success')
+                history = store.related_history(candidates,task_id=edition.get("task_id"))
                 contexts = selected_sources(sources, candidates)
             else:
                 # Batches are explicitly configured related topics, never an arbitrary single mega-query.
@@ -123,11 +155,11 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         "sources": [{**s, "content": s["content"][:2200]} for s in sources],
                         "candidate_limit": limit})
                     candidates = validate_selection(selection, settings, sources, limit)
-                    history = store.related_history(candidates)
+                    history = store.related_history(candidates,task_id=edition.get("task_id"))
                     contexts = selected_sources(sources, candidates)
                 else:
                     candidates = []
-                    history = store.history()
+                    history = store.history(edition.get("task_id"))
                     contexts = sources
             feedback = {}
             repair_keys = None
@@ -140,8 +172,9 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 editor_schema['$defs']['article']['required'].append('candidate_id')
             validation_failures = 0
             review_rounds = 0
-            length_repaired = False
-            for attempt in range(3):
+            length_repairs = 0
+            evidence_repairs = 0
+            for attempt in range(4):
                 payload = {"window": window, "edition": edition, "sections": settings.sections,
                            "sources": contexts, "candidates": candidates,
                            "history": history, "schema": editor_schema, "feedback": feedback}
@@ -155,6 +188,14 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                     doc = client.request("edit", payload)
                 doc.update({"schema_version": 2 if edition["id"] else 1, **window,
                             "generated_at": utcnow().isoformat()})
+                # Equivalent UTC/Japan/China timestamps describe the same instant.
+                # Normalize before model review so offset spelling cannot reject news.
+                for section in doc['sections']:
+                    for article in section['articles']:
+                        try:
+                            moment = datetime.fromisoformat(article['published_at'])
+                            if moment.tzinfo is not None:article['published_at'] = moment.astimezone(TZ).isoformat()
+                        except (ValueError,TypeError):pass  # Schema/window validation handles invalid values.
                 if edition["id"]:
                     doc["edition"] = edition["id"]
                     doc["title"] = day + " " + edition["name"]
@@ -169,32 +210,54 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         restore_event_keys(doc, candidates)
                         metrics.setdefault("drafts", []).append({"attempt": attempt + 1,
                             "articles": sum(len(s["articles"]) for s in doc["sections"])})
-                        doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
+                        original_draft = copy.deepcopy(doc)
+                        rejected = []
+                        doc = filter_invalid_articles(doc, settings, contexts, store.history(edition.get("task_id")), window,
                                                       {c["event_key"] for c in candidates},
-                                                      diagnostics=metrics.setdefault("article_rejections", []))
+                                                      diagnostics=rejected)
+                        metrics.setdefault('article_rejections', []).extend(rejected)
+                        repairable = [r for r in rejected if r['reason'] not in {
+                            "Article is outside the edition's reporting window", 'Repeated event', 'Unselected event'}]
+                        if repairable and evidence_repairs < 1:
+                            evidence_repairs += 1
+                            keys = {r['event_key'] for r in repairable}
+                            scoped = [c for c in candidates if c['event_key'] in keys]
+                            patch = client.request('repair', {'window': window, 'report': original_draft,
+                                'event_keys': sorted(keys), 'sources': selected_sources(sources, scoped),
+                                'history': history, 'feedback': {'validation_errors': repairable}, 'schema': SCHEMA})
+                            repaired = apply_repair(original_draft, patch, keys)
+                            used = {e['source_id'] for s in repaired['sections'] for a in s['articles']
+                                    for f in a['facts'] for e in f['evidence']}
+                            repaired['sources'] = [{k: src[k] for k in ['id','url','title','published_at']}
+                                                   for src in contexts if src['id'] in used]
+                            remaining = []
+                            doc = filter_invalid_articles(repaired, settings, contexts, store.history(edition.get("task_id")), window,
+                                                          {c['event_key'] for c in candidates}, diagnostics=remaining)
+                            metrics['evidence_repair'] = {'event_keys': sorted(keys), 'remaining_rejections': remaining}
                     else:
                         validate_report(doc, settings, contexts, history, window)
                     if edition["id"]:
-                        length_problems = style_issues(doc)
-                        if length_problems and not length_repaired:
-                            length_repaired = True
+                        length_problems = style_issues(doc, settings)
+                        while length_problems and length_repairs < 2:
+                            length_repairs += 1
                             keys = {p["event_key"] for p in length_problems}
                             patch = client.request("compress", {"articles": [
                                 {"event_key": a['event_key'],"title": a['title'],
                                  "facts": [{"index": i,"text": f['text']} for i,f in enumerate(a['facts'])],
-                                 "max_characters": next(p['max_characters'] for p in length_problems if p['event_key']==a['event_key'])}
+                                 "max_characters": int(next(p['max_characters'] for p in length_problems if p['event_key']==a['event_key']) * 0.8)}
                                 for s in doc['sections'] for a in s['articles'] if a['event_key'] in keys]})
                             doc = compact_articles(doc, patch, keys)
-                            metrics.setdefault('length_checks', []).append({'before': length_problems,'after': style_issues(doc)})
-                        oversized = {p["event_key"] for p in style_issues(doc)}
-                        doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
+                            metrics.setdefault('length_checks', []).append({'before': length_problems,'after': style_issues(doc, settings)})
+                            length_problems = style_issues(doc, settings)
+                        oversized = {p["event_key"] for p in style_issues(doc, settings)}
+                        doc = filter_invalid_articles(doc, settings, contexts, store.history(edition.get("task_id")), window,
                                                       {c["event_key"] for c in candidates},
                                                       diagnostics=metrics.setdefault("article_rejections", []),
                                                       oversized=oversized)
                         planned = {c["event_key"] for c in candidates}
                         if any(a["event_key"] not in planned for sec in doc["sections"] for a in sec["articles"]):
                             raise ValueError("Unselected event in report")
-                        all_keys = {normalize(e["id"]) for e in store.history()}
+                        all_keys = {normalize(e["id"]) for e in store.history(edition.get("task_id"))}
                         if any(normalize(a["event_key"]) in all_keys and not a["follow_up"]
                                for sec in doc["sections"] for a in sec["articles"]):
                             raise ValueError("Previously published event")
@@ -225,7 +288,12 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         if sum(len(s["articles"]) for s in checked["sections"]) != sum(len(s["articles"]) for s in doc["sections"]):
                             raise ValueError("Contradictory final review verdicts")
                     break
-                if review_rounds == 2:
+                approved = any(r.get('ok') is True and not r.get('problems')
+                               for r in review.get('article_reviews', []))
+                # When every article needs a correction, allow one final scoped
+                # repair rather than turning fixable drafts into an empty failure.
+                if review_rounds >= 2 and (not edition['id'] or approved or review_rounds >= 3
+                                          or not any(s['articles'] for s in doc['sections'])):
                     if edition["id"]:
                         doc = keep_approved(doc, review)
                         if not any(s['articles'] for s in doc['sections']):
@@ -236,13 +304,22 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 feedback = review
                 existing = {a["event_key"] for sec in doc["sections"] for a in sec["articles"]}
                 affected = review.get("affected_event_keys", [])
-                repair_keys = [k for k in affected if k in existing] or list(existing)
+                verdicts = review.get('article_reviews', [])
+                if (existing and {r.get('event_key') for r in verdicts} == existing and len(verdicts) == len(existing)):
+                    repair_keys = [r['event_key'] for r in verdicts if r.get('ok') is not True or r.get('problems')]
+                    if not repair_keys and not review.get('research_queries'):
+                        # Count/title summaries can be replaced without rewriting approved facts.
+                        doc = keep_approved(doc, review)
+                        validate_report(doc, settings, contexts, history, window)
+                        break
+                else:
+                    repair_keys = [k for k in affected if k in existing] or list(existing)
                 by_id = {s["id"]: s for s in settings.sections}
                 for index, query in enumerate(review.get("research_queries", [])[:3]):
                     if query.get("section_id") in by_id and isinstance(query.get("query"), str):
                         if settings.values.get("search", {}).get("mode") == "bounded":
                             extra_sources = bounded_supplement(settings, by_id[query["section_id"]], query["query"],
-                                                              work / f"supplement-{index}", cache)
+                                                              work / f"supplement-{index}", cache, window)
                             metrics["plugin_queries"] += 1
                         else:
                             metrics["dsh_calls"] += 1
@@ -259,13 +336,14 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
             directory = settings.data / "editions" / key
             directory.mkdir(parents=True, exist_ok=True)
             atomic_json(directory / "report.json", doc)
-            atomic_json(directory / "evidence.json", {"window": window, "sources": used_evidence(doc, contexts)})
+            atomic_json(directory / "evidence.json", {"window": window, "sources": used_evidence(doc, contexts),
+                                                     "collection_status": {"fetched_sources": len(sources)}})
             # Remove raw snapshots from any interrupted earlier attempt.
             (directory / "raw.json").unlink(missing_ok=True)
-            (directory / "report.md").write_text(markdown(doc))
+            (directory / "report.md").write_text(markdown(doc,settings))
             store.db.execute("DELETE FROM editions WHERE day=? AND status!='published'", (key,))
             store.db.commit()
-            store.add(doc)
+            store.add(doc,task_id=edition.get("task_id"))
             record_stage("build")
             build(store.settings, store)
             store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))

@@ -1,0 +1,103 @@
+# Copy to project.local.toml, then reference it from your runtime config.
+# Examples only: no subscriptions, audience, model credentials or topics preselected for an owner.
+[project]
+name = "Newspaper"
+timezone = "UTC"
+
+[schedule]
+period = "daily"                  # daily | weekly | monthly | interval
+# A complete previous period is covered; late starts catch up the latest slot.
+time = "12:00"
+# start_date = "2027-01-01"        # optional first publication date
+
+[homepage]
+mode = "groups"                   # groups: full first-level content; sections: chosen subtopics; index: links
+# Reorder or omit IDs here to customize the homepage independently of scheduling.
+groups = ["research", "culture"]
+# sections = ["research-news", "interactive-media"]  # for mode = "sections"
+
+[prompts]
+# Add instructions, rather than replacing evidence validation.
+editorial = "Report accurately and distinguish facts, claims and plans."
+# editorial_file = "editorial.local.md"  # relative to this project file
+plan = ""
+select = ""
+edit = "Write concise, readable news in the intended publication language."
+review = ""
+
+[discovery]
+max_indexes_per_edition = 16
+max_links_per_index = 20
+
+# First-level groups: names and IDs are entirely yours.
+[[groups]]
+id = "research"
+name = "Research"
+sections = ["research-news"]
+enabled = true
+notify = true
+
+[[groups]]
+id = "culture"
+name = "Culture"
+sections = ["interactive-media"]
+enabled = true
+notify = true
+
+[[sections]]
+id = "research-news"
+name = "Research news"
+scope = "Substantial research announcements. Distinguish peer review, preprints and replication."
+enabled = true
+notify = true
+[sections.search]
+queries = []                      # empty: AI plans using scope, keywords, languages and the plan prompt
+languages = ["en"]
+# queries = ["research announcements after:{window_start}", "research release {date}"]
+# Supported placeholders: {date}, {window_start}, {window_end} (ISO dates).
+[sections.filter]
+importance = ["重大", "重要"]       # schema values: major, important
+reliability = ["A", "B"]           # A: primary/corroborated; B: attributed credible reporting
+exclude_keywords = []
+require_primary = false
+[sections.format]
+max_characters = 1000
+max_major_characters = 1600
+max_paragraphs = 6
+max_major_paragraphs = 8
+[sections.prompts]
+plan = "Seek primary research publications and relevant independent coverage."
+select = "Exclude routine publicity and unsupported breakthrough claims."
+edit = "Explain the result and its important limitations."
+review = "Check whether the evidence supports the claimed stage of research."
+# Optional per-section source. Replace the example URL before enabling it.
+# [[sections.sources]]
+# url = "https://publisher.example.org/feed.xml"
+# kind = "rss"                    # rss | index | page
+# required = true                 # unavailable required sources fail this publication; no silent success
+
+[[sections]]
+id = "interactive-media"
+name = "Interactive media"
+scope = "Important new releases and substantial updates. Exclude routine sales and minor patches."
+enabled = true
+notify = true
+[sections.schedule]
+period = "weekly"
+weekday = "mon"                   # mon | tue | wed | thu | fri | sat | sun
+time = "09:00"                    # local project timezone; covers the preceding week
+# Monthly: period = "monthly", month_day = 1 (short months use their last day).
+# Every N days: period = "interval", every_days = 3, start_date = "2027-01-01".
+[sections.search]
+queries = []
+languages = ["en"]
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+exclude_keywords = []
+require_primary = false
+[sections.prompts]
+plan = "Look for official release announcements and reliable editorial coverage."
+select = "Differentiate announcement, early access and final release."
+edit = "Include platform and release timing only when supported."
+review = ""

@@ -31,7 +31,7 @@ def clean(settings: Settings, store: Store, now: float | None = None) -> dict:
             dated = set(expired)
             for path in (directory / "daily").glob("*"):
                 try:
-                    if expiry(path.name) <= now:
+                    if expiry(path.name,settings.timezone) <= now:
                         dated.add(path.name)
                 except ValueError:
                     pass
@@ -44,12 +44,13 @@ def clean(settings: Settings, store: Store, now: float | None = None) -> dict:
     for directory in (settings.data / "editions").iterdir():
         try:
             date.fromisoformat(directory.name)
-            due = expiry(directory.name) <= now
+            due = expiry(directory.name,settings.timezone) <= now
         except ValueError:
             due = True
         if due:
             shutil.rmtree(directory)
             removed.append(directory.name)
+    store.db.execute("DELETE FROM notification_batches WHERE expires_at<=?", (now,))
     store.db.execute("DELETE FROM editions WHERE expires_at<=?", (now,))
     store.db.execute("DELETE FROM runs WHERE started_at<=?", (now - 30 * 86400,))
     store.db.commit()

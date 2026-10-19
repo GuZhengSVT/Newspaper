@@ -3,6 +3,7 @@
 {% for section in view.sections %}
 <section class="news-section" id="{{ section.anchor }}" data-outline>
   {% if home %}<h3 class="section-title">{{ section.name }}</h3>{% else %}<h2 class="section-title">{{ section.name }}</h2>{% endif %}
+  {% if section.issue_url %}<p class="story-meta">更新于 {{ section.issue_date }} · <a href="{{ section.issue_url }}">本期</a></p>{% endif %}
   {% for article in section.articles %}
   <article class="story" id="{{ article.anchor }}" data-outline>
     {% if home %}<h4 class="story-title">{{ article.title }}</h4>{% else %}<h3 class="story-title">{{ article.title }}</h3>{% endif %}
@@ -25,7 +26,8 @@
       <a class="toc-edition" href="#{{ group.anchor }}">{{ group.label }}</a>
       {% for section in group.sections %}
       <a class="toc-section" href="#{{ section.anchor }}">{{ section.name }}</a>
-      {% for article in section.articles %}<a class="toc-article" href="#{{ article.anchor }}">{{ article.title }}</a>{% endfor %}
+      {% if section.issue_url %}<p class="story-meta">更新于 {{ section.issue_date }} · <a href="{{ section.issue_url }}">本期</a></p>{% endif %}
+  {% for article in section.articles %}<a class="toc-article" href="#{{ article.anchor }}">{{ article.title }}</a>{% endfor %}
       {% endfor %}
     {% endfor %}
     </nav>

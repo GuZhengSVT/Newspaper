@@ -2,13 +2,10 @@
 Description=Newspaper collect, verify, build and notify
 Wants=network-online.target
 After=network-online.target
-StartLimitIntervalSec=6h
-StartLimitBurst=3
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
-Restart=on-failure
-RestartSec=5min
 User=newspaper
 Group=newspaper
 WorkingDirectory=/opt/Newspaper
@@ -28,5 +25,5 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/newspaper /srv/newspaper
-StandardOutput=null
-StandardError=null
+StandardOutput=journal
+StandardError=journal

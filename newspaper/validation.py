@@ -36,9 +36,20 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
     historical = {normalize(e["id"]) for e in history}
     seen = set()
     for section in doc["sections"]:
+        configured = next(s for s in settings.sections if s['id']==section['id'])
+        rules = configured.get('filter', {})
         if not section["articles"] and not section["empty_reason"].strip():
             raise ValueError("An empty section needs an explanation")
         for article in section["articles"]:
+            if article.get('importance','重要') not in rules.get('importance',['重大','重要']):
+                raise ValueError('Article importance excluded by section filter')
+            if article.get('reliability','B') not in rules.get('reliability',['A','B']):
+                raise ValueError('Article reliability excluded by section filter')
+            body = normalize(article['title']+' '+' '.join(f['text'] for f in article['facts']))
+            if any(normalize(word) in body for word in rules.get('exclude_keywords',[]) if word.strip()):
+                raise ValueError('Article excluded by section keyword filter')
+            if rules.get('require_primary') and any(f.get('verification',article['verification'])!='official_statement' for f in article['facts'] if f.get('kind','fact')=='fact'):
+                raise ValueError('Section requires primary evidence')
             moment = datetime.fromisoformat(article["published_at"])
             if moment.tzinfo is None or not start <= moment < end:
                 raise ValueError("Article is outside the edition's reporting window")

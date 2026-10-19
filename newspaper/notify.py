@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import smtplib
 import ssl
@@ -28,15 +29,23 @@ def enqueue(settings: Settings, store: Store, day: str) -> None:
 
 def send(settings: Settings, channel: str, day: str) -> None:
     # Push links, not full articles or attachments: retention applies on this VPS.
-    label = day.replace("/technology-politics", " 科技与政治").replace("/acgn", " ACGN")
-    text = f"{label} Newspaper 日报已发布。\n阅读：{settings.base_url}/daily/{day}/\nMarkdown：{settings.base_url}/downloads/{day}.md\n服务器仅保留最近 30 天。"
+    label = json.loads((settings.data / "editions" / day / "report.json").read_text())["title"]
+    text = f"{label} Newspaper 新闻已发布。\n阅读：{settings.base_url}/daily/{day}/\nMarkdown：{settings.base_url}/downloads/{day}.md\n服务器仅保留最近 30 天。"
+    send_text(settings,channel,f"Newspaper · {label} 已更新",text,day)
+
+
+class UncertainDelivery(RuntimeError):
+    """The provider might have accepted the message; automatic retry risks duplicates."""
+
+
+def send_text(settings: Settings, channel: str, subject: str, text: str, delivery_id: str) -> None:
     if channel == "email":
         message = EmailMessage()
-        message["Subject"] = f"Newspaper · {label} 日报已更新"
+        message["Subject"] = subject
         message["From"] = os.environ["EMAIL_FROM"]
         message["To"] = os.environ["EMAIL_TO"]
         message["Date"] = formatdate(localtime=False)
-        digest = hashlib.sha256((settings.base_url + day).encode()).hexdigest()[:24]
+        digest = hashlib.sha256((settings.base_url + delivery_id).encode()).hexdigest()[:24]
         message["Message-ID"] = f"<{digest}@newspaper.local>"
         message.set_content(text)
         security = os.environ.get("SMTP_SECURITY", "starttls")
@@ -44,19 +53,35 @@ def send(settings: Settings, channel: str, day: str) -> None:
             raise ValueError("SMTP requires TLS")
         cls = smtplib.SMTP_SSL if security == "ssl" else smtplib.SMTP
         kwargs = {"context": ssl.create_default_context()} if security == "ssl" else {}
-        with cls(os.environ["SMTP_HOST"], int(os.environ.get("SMTP_PORT", "587")), timeout=30, **kwargs) as smtp:
-            if security == "starttls":
-                smtp.starttls(context=ssl.create_default_context())
-            smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
-            smtp.send_message(message)
+        accepted=False
+        try:
+            with cls(os.environ["SMTP_HOST"], int(os.environ.get("SMTP_PORT", "587")), timeout=30, **kwargs) as smtp:
+                if security == "starttls":
+                    smtp.starttls(context=ssl.create_default_context())
+                smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+                try:
+                    refused=smtp.send_message(message)
+                    if refused:raise UncertainDelivery('Partial SMTP delivery')
+                    accepted=True
+                except smtplib.SMTPResponseException:raise
+                except (smtplib.SMTPServerDisconnected,OSError) as exc:
+                    raise UncertainDelivery('SMTP acceptance unknown') from exc
+        except OSError:
+            # A failed QUIT cannot undo an acknowledged DATA submission.
+            if not accepted:raise
     elif channel == "telegram":
         token = os.environ["TELEGRAM_BOT_TOKEN"]
         with httpx.Client(timeout=30) as client:
-            response = client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
-                "chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text, "link_preview_options": {"is_disabled": True},
-            })
+            try:
+                response = client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
+                    "chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text, "link_preview_options": {"is_disabled": True},
+                })
+            except (httpx.ConnectError,httpx.ConnectTimeout):raise
+            except httpx.TransportError as exc:raise UncertainDelivery('Telegram acceptance unknown') from exc
             response.raise_for_status()
-            if not response.json().get("ok"):
+            try:accepted=response.json().get('ok')
+            except ValueError as exc:raise UncertainDelivery('Telegram response unreadable') from exc
+            if not accepted:
                 raise RuntimeError("Telegram rejected delivery")
     else:
         raise ValueError("Unknown notification channel")
@@ -85,4 +110,8 @@ def deliver(settings: Settings, store: Store) -> dict:
                              (attempts, now + min(3600, 60 * 2 ** attempts), type(exc).__name__, row["day"], channel))
             result["failed"] += 1
         store.db.commit()
+    from .batches import deliver_batches
+    batched=deliver_batches(settings,store)
+    for key,value in batched.items():
+        if value or key in result:result[key]=result.get(key,0)+value
     return result

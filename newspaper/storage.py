@@ -31,9 +31,9 @@ def normalize_entity(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKC", text).casefold() if c.isalnum())
 
 
-def expiry(day: str) -> float:
+def expiry(day: str, timezone=TZ) -> float:
     # Rebuilds never extend retention. Keep the edition date and the next 29 dates.
-    return datetime.combine(date.fromisoformat(day.split("/")[0]) + timedelta(days=30), time(), TZ).timestamp()
+    return datetime.combine(date.fromisoformat(day.split("/")[0]) + timedelta(days=30), time(), timezone).timestamp()
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -98,6 +98,21 @@ class Store:
             PRIMARY KEY(entity,event_id,day)
           );
           CREATE INDEX IF NOT EXISTS entity_lookup ON event_entities(entity);
+          CREATE TABLE IF NOT EXISTS publication_tasks (
+            day TEXT PRIMARY KEY REFERENCES editions(day) ON DELETE CASCADE, task_id TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS publication_task_lookup ON publication_tasks(task_id);
+          CREATE TABLE IF NOT EXISTS notification_batches (
+            id TEXT PRIMARY KEY, task_id TEXT NOT NULL, period TEXT NOT NULL,
+            window_start TEXT NOT NULL, window_end TEXT NOT NULL,
+            expected TEXT NOT NULL, channels TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'waiting',
+            expires_at REAL NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS notification_outbox (
+            batch_id TEXT NOT NULL REFERENCES notification_batches(id) ON DELETE CASCADE,
+            channel TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt REAL NOT NULL DEFAULT 0, last_error TEXT, PRIMARY KEY(batch_id,channel)
+          );
         """)
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
         if "facts" not in columns:
@@ -117,12 +132,13 @@ class Store:
             (now if now is not None else utcnow().timestamp(),),
         )]
 
-    def add(self, doc: dict, legacy: bool = False) -> None:
+    def add(self, doc: dict, legacy: bool = False, task_id: str | None = None) -> None:
         key = edition_key(doc)
         self.db.execute(
             "INSERT INTO editions(day,expires_at,status,title,summary,legacy) VALUES(?,?,'ready',?,?,?)",
-            (key, expiry(doc["date"]), doc["title"], doc["summary"], int(legacy)),
+            (key, expiry(doc["date"],self.settings.timezone), doc["title"], doc["summary"], int(legacy)),
         )
+        if task_id:self.db.execute("INSERT INTO publication_tasks(day,task_id) VALUES(?,?)",(key,task_id))
         for section in doc.get("sections", []):
             for article in section["articles"]:
                 entities = article.get("entities", [])
@@ -137,13 +153,20 @@ class Store:
                                         (normalized, article["event_key"], key))
         self.db.commit()
 
-    def history(self) -> list[dict]:
+    def set_task(self, day: str, task_id: str | None) -> None:
+        if task_id:
+            self.db.execute('insert or ignore into publication_tasks(day,task_id) values(?,?)',(day,task_id))
+            self.db.commit()
+
+    def history(self, task_id: str | None = None) -> list[dict]:
         return [dict(r) for r in self.db.execute(
-            "SELECT e.id,e.description,e.day FROM events e JOIN editions d ON e.day=d.day WHERE d.expires_at>? AND d.status='published'",
-            (utcnow().timestamp(),),
+            """SELECT e.id,e.description,e.day FROM events e JOIN editions d ON e.day=d.day
+               LEFT JOIN publication_tasks t ON t.day=d.day
+               WHERE d.expires_at>? AND d.status='published' AND (? IS NULL OR t.task_id=?)""",
+            (utcnow().timestamp(),task_id,task_id),
         )]
 
-    def related_history(self, candidates: list[dict], limit: int = 40) -> list[dict]:
+    def related_history(self, candidates: list[dict], limit: int = 40, task_id: str | None = None) -> list[dict]:
         entities = {normalize_entity(e) for c in candidates for e in c.get("entities", [])}
         entities.discard("")
         keys = {c["event_key"] for c in candidates if c.get("event_key")}
@@ -153,15 +176,16 @@ class Store:
         keymarks = ",".join("?" for _ in keys) or "NULL"
         rows = self.db.execute(f"""SELECT DISTINCT e.* FROM events e
             JOIN editions d ON d.day=e.day LEFT JOIN event_entities x ON x.event_id=e.id AND x.day=e.day
-            WHERE d.status='published' AND d.expires_at>? AND (x.entity IN ({marks}) OR e.id IN ({keymarks}))
-            ORDER BY e.day DESC LIMIT ?""", (utcnow().timestamp(), *entities, *keys, limit)).fetchall()
+            LEFT JOIN publication_tasks t ON t.day=d.day
+            WHERE d.status='published' AND d.expires_at>? AND (? IS NULL OR t.task_id=?) AND (x.entity IN ({marks}) OR e.id IN ({keymarks}))
+            ORDER BY e.day DESC LIMIT ?""", (utcnow().timestamp(), task_id, task_id, *entities, *keys, limit)).fetchall()
         result = [{**dict(r), "facts": json.loads(r["facts"]), "entities": json.loads(r["entities"])} for r in rows]
         # Imported v1 archives have no entity index. Match their short event titles locally.
         known = {(r["id"], r["day"]) for r in result}
         if len(result) < limit:
-            legacy = self.db.execute("""SELECT e.* FROM events e JOIN editions d ON d.day=e.day
-                WHERE d.status='published' AND d.expires_at>? AND e.entities='[]' ORDER BY e.day DESC""",
-                (utcnow().timestamp(),)).fetchall()
+            legacy = self.db.execute("""SELECT e.* FROM events e JOIN editions d ON d.day=e.day LEFT JOIN publication_tasks t ON t.day=d.day
+                WHERE d.status='published' AND d.expires_at>? AND e.entities='[]' AND (? IS NULL OR t.task_id=?) ORDER BY e.day DESC""",
+                (utcnow().timestamp(),task_id,task_id)).fetchall()
             for row in legacy:
                 if len(result) >= limit:
                     break

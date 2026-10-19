@@ -6,11 +6,13 @@ import os
 import shutil
 import signal
 import subprocess
+import re
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .config import ROOT, Settings
 from .model import parse_json
@@ -65,7 +67,7 @@ def prepare_profile(work: Path, settings: Settings) -> tuple[Path, dict]:
     overlay = [
         {"id": "agent-default-model", "config": {"provider": model["provider"], "model": model["id"], "reasoningEffort": "high"}},
         {"id": "llm-pi-ai", "config": {"providers": {model["provider"]: {
-            "displayName": model["provider"], "apiKeyEnv": model.get("api_key_env", "D1API_API_KEY"),
+            "displayName": model["provider"], "apiKeyEnv": model.get("api_key_env", "NEWSPAPER_API_KEY"),
             "api": "openai-completions", "baseURL": model["base_url"].rstrip("/") + "/",
             "models": [{"id": model["id"], "name": model["id"], "input": ["text"],
                         "contextWindow": 1000000, "maxTokens": model.get("max_tokens", 12000),
@@ -117,11 +119,11 @@ def collect(settings: Settings, section: dict, window: dict, work: Path, supplem
     return result
 
 
-def fetch_page(settings: Settings, url: str, work: Path) -> dict:
+def fetch_page(settings: Settings, url: str, work: Path, max_chars: int = 200000) -> dict:
     url = source_url(url)
     env = {**os.environ, "RESEARCH_CACHE_DIR": str(work / "cache"), "NODE_OPTIONS": "--max-old-space-size=128"}
     result = subprocess.run(
-        ["node", str(ROOT / "scripts" / "fetch.mjs")], input=json.dumps({"url": url}),
+        ["node", str(ROOT / "scripts" / "fetch.mjs")], input=json.dumps({"url": url, "max_chars": max_chars}),
         capture_output=True, text=True, env=env,
         timeout=settings.values.get("search", {}).get("timeout_seconds", 35) + 5, check=True)
     return parse_json(result.stdout)
@@ -171,6 +173,16 @@ def publication_time(content: str) -> str | None:
     return None
 
 
+def visible_publication_time(text: str, timezone: str) -> str | None:
+    """Only configured publishers: keep displayed clock time, add their documented zone."""
+    match = re.search(r'\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\b', text[:2500])
+    if match:
+        try:
+            return datetime(*(int(v or 0) for v in match.groups()), tzinfo=ZoneInfo(timezone)).isoformat()
+        except ValueError:pass
+    return None
+
+
 def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None:
     try:
         url = source_url(candidate["url"])
@@ -179,7 +191,17 @@ def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None
         if len(text) < 100:
             return None
         published = publication_time(data['content']) if data['kind'] == 'html' else None
-        if published:text = '页面元数据 datePublished: ' + published + '\n' + text
+        basis = '页面元数据 datePublished'
+        timezone = settings.values.get('publication_timezones', {}).get(urlsplit(url).hostname)
+        if not published and timezone:
+            published = visible_publication_time(text, timezone)
+            basis = '发布者页面时间（站点时区 ' + timezone + '）'
+        feed_stamp = candidate.get('publisher_published_at')
+        feed_url = candidate.get('discovery_index', '')
+        if not published and feed_stamp and urlsplit(feed_url).hostname == urlsplit(url).hostname:
+            published = feed_stamp
+            basis = '发布者 RSS 发布时间（' + feed_url + '）'
+        if published:text = basis + ': ' + published + '\n' + text
         return {"id": "s-" + hashlib.sha256(url.encode()).hexdigest()[:16], "url": url,
                 "title": str(candidate.get("title", ""))[:300],
                 "published_at": published, "search_published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat()}

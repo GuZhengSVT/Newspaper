@@ -40,13 +40,13 @@ class EditionTests(unittest.TestCase):
         self.store.db.commit()
 
     def test_same_date_two_issues_build_and_expire(self):
-        for slug in ['technology-politics','acgn']:
+        for slug in ['research','culture']:
             self.save(self.issue(slug))
         settings = Settings({**self.settings.values, 'editions':[
-            {'id':'technology-politics','name':'科技与政治','sections':['fixture']},
-            {'id':'acgn','name':'ACGN','sections':[]}]},self.settings.data,self.settings.web,self.settings.base_url)
+            {'id':'research','name':'Research','sections':['fixture']},
+            {'id':'culture','name':'Culture','sections':[]}]},self.settings.data,self.settings.web,self.settings.base_url)
         build(settings,self.store)
-        for slug in ['technology-politics','acgn']:
+        for slug in ['research','culture']:
             page = (self.settings.web/'current/daily'/self.day/slug/'index.html').read_text()
             self.assertIn(f'/downloads/{self.day}/{slug}.md',page)
             self.assertTrue((self.settings.web/'current/downloads'/self.day/f'{slug}.md').is_file())
@@ -56,25 +56,25 @@ class EditionTests(unittest.TestCase):
         self.assertFalse((self.settings.data/'editions'/self.day).exists())
 
     def test_related_history_uses_normalized_entities(self):
-        self.save(self.issue('acgn'))
+        self.save(self.issue('culture'))
         self.assertEqual(len(self.store.related_history([{'entities':['Fixture-Product']} ])),1)
         self.assertEqual(self.store.related_history([{'entities':['Unrelated']}]),[])
 
     def two_edition_settings(self):
         values={**self.settings.values,
-                'sections':self.settings.sections+[{'id':'acgn-fixture','name':'ACGN测试板块'}],
-                'editions':[{'id':'technology-politics','name':'科技与政治','sections':['fixture']},
-                            {'id':'acgn','name':'ACGN','sections':['acgn-fixture']}],
+                'sections':self.settings.sections+[{'id':'culture-fixture','name':'Culture测试板块'}],
+                'editions':[{'id':'research','name':'Research','sections':['fixture']},
+                            {'id':'culture','name':'Culture','sections':['culture-fixture']}],
                 'search':{'mode':'bounded'}}
         settings=Settings(values,self.settings.data,self.settings.web,self.settings.base_url)
         self.store.settings=settings
         return settings
 
     def two_edition_documents(self):
-        tech=self.issue('technology-politics');acgn=self.issue('acgn')
-        section=acgn['sections'][0];section.update(id='acgn-fixture',name='ACGN测试板块')
-        section['articles'][0]['event_key']='acgn|synthetic|event'
-        return [tech,acgn]
+        tech=self.issue('research');culture=self.issue('culture')
+        section=culture['sections'][0];section.update(id='culture-fixture',name='Culture测试板块')
+        section['articles'][0]['event_key']='culture|synthetic|event'
+        return [tech,culture]
 
     def test_two_disjoint_editions_build_with_whole_site_configuration(self):
         settings=self.two_edition_settings();documents=self.two_edition_documents()
@@ -91,7 +91,7 @@ class EditionTests(unittest.TestCase):
              patch('newspaper.pipeline.Model.request',side_effect=responses):
             result=generate(settings,self.store,notify=False)
         self.assertEqual(result['state'],'published')
-        for slug in ['technology-politics','acgn']:
+        for slug in ['research','culture']:
             self.assertTrue(self.store.published(self.day+'/'+slug))
             self.assertTrue((settings.web/'current/archive'/slug/'index.html').is_file())
             self.assertIn('/daily/'+self.day+'/'+slug+'/',(settings.web/f'current/feed-{slug}.xml').read_text())
@@ -108,16 +108,16 @@ class EditionTests(unittest.TestCase):
             result=generate(settings,self.store,notify=False)
         self.assertEqual(result['state'],'published');model.assert_not_called()
         self.assertTrue(all(e['resumed'] for e in result['editions']))
-        for slug in ['technology-politics','acgn']:
+        for slug in ['research','culture']:
             self.assertTrue(self.store.published(self.day+'/'+slug))
 
     def test_a_reliability_does_not_accept_unconfirmed_single_report(self):
-        doc=self.issue('acgn');doc['sections'][0]['articles'][0]['verification']='single_source'
+        doc=self.issue('culture');doc['sections'][0]['articles'][0]['verification']='single_source'
         with self.assertRaises(ValueError):
             validate_report(doc,self.settings,[self.source],[],self.window)
 
     def test_core_claim_requires_its_own_corroboration(self):
-        doc=self.issue('acgn');doc['sections'][0]['articles'][0]['verification']='corroborated'
+        doc=self.issue('culture');doc['sections'][0]['articles'][0]['verification']='corroborated'
         doc['sections'][0]['articles'][0]['facts'][0]['verification']='corroborated'
         extra={**self.source,'id':'s2','url':'https://another.test/source'}
         doc['sources'].append({k:extra[k] for k in ['id','url','title','published_at']})
@@ -125,10 +125,10 @@ class EditionTests(unittest.TestCase):
             validate_report(doc,self.settings,[self.source,extra],[],self.window)
 
     def test_empty_sections_hidden_from_web_and_markdown(self):
-        doc=self.issue('acgn');doc['sections'][0]['articles']=[];doc['sections'][0]['empty_reason']='No qualifying events'
+        doc=self.issue('culture');doc['sections'][0]['articles']=[];doc['sections'][0]['empty_reason']='No qualifying events'
         self.save(doc);build(self.settings,self.store)
         self.assertNotIn('## 测试板块',markdown(doc))
-        page=(self.settings.web/'current/daily'/self.day/'acgn/index.html').read_text()
+        page=(self.settings.web/'current/daily'/self.day/'culture/index.html').read_text()
         self.assertNotIn('测试板块',page)
 
     def test_preview_never_queues_or_sends_messages(self):
@@ -167,7 +167,7 @@ class EditionTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.store.document(self.day+'/../../credentials')
 
     def test_edition_failure_does_not_block_other_edition(self):
-        editions=[{'id':'technology-politics','name':'科技','sections':['fixture']},{'id':'acgn','name':'ACGN','sections':[]}]
+        editions=[{'id':'research','name':'科技','sections':['fixture']},{'id':'culture','name':'Culture','sections':[]}]
         settings=Settings({**self.settings.values,'editions':editions},self.settings.data,self.settings.web,self.settings.base_url)
         with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
              patch('newspaper.pipeline.generate_edition',side_effect=[ValueError('failure'),{'state':'published'}]) as run:
@@ -176,7 +176,7 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(result['state'],'partial_failure')
 
     def test_targeted_repair_does_not_change_unaffected_article(self):
-        doc=self.issue('acgn')
+        doc=self.issue('culture')
         original=copy.deepcopy(doc['sections'][0]['articles'][0])
         second={**copy.deepcopy(original),'event_key':'other|new|event','title':'Unchanged'}
         doc['sections'][0]['articles'].append(second)
@@ -216,7 +216,7 @@ class EditionTests(unittest.TestCase):
         bad=httpx.Response(503,json={'error':{'code':'system_memory_overloaded'}},request=request)
         good=httpx.Response(200,json={'choices':[{'finish_reason':'stop','message':{'content':'{"queries":[]}'}}],
                                     'usage':{'prompt_tokens':10,'completion_tokens':5}},request=request)
-        with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
+        with patch.dict(os.environ,{'NEWSPAPER_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
             client.return_value.__enter__.return_value.post.side_effect=[bad,good]
             model=Model(self.settings);self.assertEqual(model.request('plan',{}),{'queries':[]})
         sleep.assert_called_once_with(15)
@@ -224,8 +224,8 @@ class EditionTests(unittest.TestCase):
         self.assertNotIn('synthetic-test-secret',str(model.usage))
 
     def test_complete_v2_pipeline_publishes_without_push(self):
-        doc=self.issue('acgn')
-        settings=Settings({**self.settings.values,'editions':[{'id':'acgn','name':'ACGN 日报','sections':['fixture']}],
+        doc=self.issue('culture')
+        settings=Settings({**self.settings.values,'editions':[{'id':'culture','name':'Culture 日报','sections':['fixture']}],
                            'search':{'mode':'bounded'}},self.settings.data,self.settings.web,self.settings.base_url)
         candidate={'event_key':doc['sections'][0]['articles'][0]['event_key'],'entities':['Fixture Product'],
                    'section_id':'fixture','importance':'重要','source_ids':['s1']}
@@ -233,19 +233,19 @@ class EditionTests(unittest.TestCase):
         with patch('newspaper.pipeline.utcnow',return_value=moment),              patch('newspaper.pipeline.bounded_research',return_value=([self.source],[candidate],[],[],{})),              patch('newspaper.pipeline.Model.request',side_effect=[doc,{'ok':True,'summary_ok':True,'article_reviews':[{'event_key':candidate['event_key'],'ok':True,'problems':[]}]}]),              patch('newspaper.pipeline.deliver') as sender:
             result=generate(settings,self.store,notify=False)
         self.assertEqual(result['state'],'published');sender.assert_not_called()
-        key=self.day+'/acgn'
+        key=self.day+'/culture'
         self.assertTrue(self.store.published(key))
         self.assertTrue((self.settings.web/'current/daily'/key/'index.html').is_file())
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM deliveries').fetchone()[0],0)
 
     def test_manual_cutoff_includes_verified_afternoon_news(self):
         cutoff=datetime.fromisoformat(self.day+'T21:03:11+08:00')
-        doc=self.issue('acgn');doc['window_end']=cutoff.isoformat()
+        doc=self.issue('culture');doc['window_end']=cutoff.isoformat()
         source={**self.source,'published_at':self.day+'T20:00:00+08:00'}
         article=doc['sections'][0]['articles'][0];article['published_at']=source['published_at']
         candidate={'event_key':article['event_key'],'entities':['Fixture Product'],'section_id':'fixture',
                    'importance':'重要','source_ids':['s1']}
-        settings=Settings({**self.settings.values,'editions':[{'id':'acgn','name':'ACGN','sections':['fixture']}],
+        settings=Settings({**self.settings.values,'editions':[{'id':'culture','name':'Culture','sections':['fixture']}],
                            'search':{'mode':'bounded'}},self.settings.data,self.settings.web,self.settings.base_url)
         review={'ok':True,'summary_ok':True,'article_reviews':[{'event_key':article['event_key'],'ok':True,'problems':[]}]}
         with patch('newspaper.pipeline.utcnow',return_value=cutoff+timedelta(minutes=1)), \
@@ -253,7 +253,7 @@ class EditionTests(unittest.TestCase):
              patch('newspaper.pipeline.Model.request',side_effect=[doc,review]):
             result=generate(settings,self.store,notify=False,cutoff=cutoff)
         self.assertEqual(result['state'],'published')
-        final=self.store.document(self.day+'/acgn')
+        final=self.store.document(self.day+'/culture')
         self.assertEqual(final['window_end'],cutoff.isoformat())
         self.assertEqual(final['window_start'],self.window['window_start'])
         self.assertEqual(research.call_args.args[2]['window_end'],cutoff.isoformat())
@@ -285,7 +285,7 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(result,[major])
 
     def test_article_may_mix_official_and_corroborated_facts(self):
-        doc=self.issue('acgn');article=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');article=doc['sections'][0]['articles'][0]
         article['verification']='corroborated'
         extra={**self.source,'id':'s2','url':'https://another.test/source'}
         doc['sources'].append({k:extra[k] for k in ['id','url','title','published_at']})
@@ -295,13 +295,13 @@ class EditionTests(unittest.TestCase):
         validate_report(doc,self.settings,[self.source,extra],[],self.window)
 
     def test_unconfirmed_core_fact_cannot_hide_under_official_article_label(self):
-        doc=self.issue('acgn');doc['sections'][0]['articles'][0]['facts'][0]['verification']='single_source'
+        doc=self.issue('culture');doc['sections'][0]['articles'][0]['facts'][0]['verification']='single_source'
         with self.assertRaises(ValueError):validate_report(doc,self.settings,[self.source],[],self.window)
 
     def test_transport_restart_retry_stops_after_three_attempts(self):
         from newspaper.model import Model
         import httpx,os
-        with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
+        with patch.dict(os.environ,{'NEWSPAPER_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
             post=client.return_value.__enter__.return_value.post
             post.side_effect=httpx.RemoteProtocolError('upstream restarted')
             with self.assertRaises(httpx.RemoteProtocolError):Model(self.settings).request('plan',{})
@@ -312,13 +312,13 @@ class EditionTests(unittest.TestCase):
         from newspaper.model import Model
         import httpx,os
         response=httpx.Response(401,request=httpx.Request('POST','https://example.test/v1'))
-        with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
+        with patch.dict(os.environ,{'NEWSPAPER_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
             post=client.return_value.__enter__.return_value.post;post.return_value=response
             with self.assertRaises(httpx.HTTPStatusError):Model(self.settings).request('plan',{})
         self.assertEqual(post.call_count,1);sleep.assert_not_called()
 
     def test_final_review_publishes_only_explicitly_approved_articles(self):
-        doc=self.issue('acgn');article=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');article=doc['sections'][0]['articles'][0]
         bad={**copy.deepcopy(article),'event_key':'rejected','title':'Unsupported'}
         doc['sections'][0]['articles'].append(bad)
         review={'article_reviews':[{'event_key':article['event_key'],'ok':True,'problems':[]},
@@ -329,28 +329,28 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(len(doc['sections'][0]['articles']),2)
 
     def test_incomplete_final_review_cannot_publish_partial_success(self):
-        with self.assertRaises(ValueError):keep_approved(self.issue('acgn'),{'article_reviews':[]})
+        with self.assertRaises(ValueError):keep_approved(self.issue('culture'),{'article_reviews':[]})
 
     def test_legacy_and_new_edition_on_same_day_share_parent_directory(self):
-        self.save(copy.deepcopy(self.doc));self.save(self.issue('acgn'))
+        self.save(copy.deepcopy(self.doc));self.save(self.issue('culture'))
         build(self.settings,self.store)
         self.assertTrue((self.settings.web/'current/daily'/self.day/'index.html').exists())
-        self.assertTrue((self.settings.web/'current/daily'/self.day/'acgn/index.html').exists())
+        self.assertTrue((self.settings.web/'current/daily'/self.day/'culture/index.html').exists())
 
     def test_reviewed_ready_edition_resumes_without_calling_model_or_push(self):
-        doc=self.issue('acgn');self.save(doc)
+        doc=self.issue('culture');self.save(doc)
         key=edition_key(doc)
         evidence={'sources':[self.source]}
         (self.settings.data/'editions'/key/'evidence.json').write_text(json.dumps(evidence))
         self.store.db.execute("UPDATE editions SET status='ready' WHERE day=?",(key,));self.store.db.commit()
         from newspaper.pipeline import generate_edition
         with patch('newspaper.pipeline.Model') as model,patch('newspaper.pipeline.deliver') as sender:
-            result=generate_edition(self.settings,self.store,{'id':'acgn'}, {},False)
+            result=generate_edition(self.settings,self.store,{'id':'culture'}, {},False)
         model.assert_not_called();sender.assert_not_called()
         self.assertTrue(result['resumed']);self.assertTrue(self.store.published(key))
 
     def test_invalid_quote_excludes_only_its_article_before_ai_review(self):
-        doc=self.issue('acgn');good=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');good=doc['sections'][0]['articles'][0]
         bad=copy.deepcopy(good);bad['event_key']='bad';bad['facts'][0]['evidence'][0]['quote']='Invented quotation not in source'
         doc['sections'][0]['articles'].append(bad)
         final=filter_invalid_articles(doc,self.settings,[self.source],[],self.window,{good['event_key'],'bad'})
@@ -358,7 +358,7 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(len(doc['sections'][0]['articles']),2)
 
     def test_global_structure_errors_are_not_hidden_by_article_filtering(self):
-        doc=self.issue('acgn');doc['sections'][0]['id']='unconfigured'
+        doc=self.issue('culture');doc['sections'][0]['id']='unconfigured'
         with self.assertRaises(ValueError):filter_invalid_articles(doc,self.settings,[self.source],[],self.window,set())
 
 

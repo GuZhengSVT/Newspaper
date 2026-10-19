@@ -29,3 +29,15 @@ test('rate-limited engines cool down while other DSH engines keep supplying cand
     {section_id:'fixture',query:'release'},['exa','anysearch'],100,concurrentState,providers)));
   assert.ok(concurrent.every(result=>result.engine_status.length===2));
 });
+
+test('exhausted anonymous quota stops repeated calls and preserves the working engine',async()=>{
+  const state=new Map();let calls=0;
+  const providers={anysearch:async()=>{calls++;throw Error('AnySearch API error (HTTP 402)');},
+    keenable:async()=>({sources:[{url:'https://example.test/news',title:'Synthetic update'}]})};
+  for(let i=0;i<2;i++){
+    const result=await searchQuery({section_id:'fixture',query:'news'},['anysearch','keenable'],100,state,providers);
+    assert.equal(result.sources.length,1);
+    assert.ok(result.engine_status.some(e=>e.engine==='anysearch'&&e.status==='quota_exhausted'));
+  }
+  assert.equal(calls,1);
+});

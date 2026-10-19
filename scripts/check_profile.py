@@ -19,6 +19,6 @@ with tempfile.TemporaryDirectory(prefix="newspaper-profile-") as temp:
         [str(ROOT / "node_modules/.bin/dsh"), "--profile", "newspaper", "--patch", str(overlay), "--dump-config"],
         cwd=directory, env=env, capture_output=True, text=True, timeout=60,
     )
-    if result.returncode or not all(text in result.stdout for text in ["deepseek-v4.1-flash", "dsh-free-search", "web-search-free"]):
+    if result.returncode or not all(text in result.stdout for text in [values["model"]["id"], "dsh-free-search", "web-search-free"]):
         raise SystemExit("DSH profile composition failed; check pinned runtime/peer dependencies")
 print("DSH profile composition passed (no API calls).")

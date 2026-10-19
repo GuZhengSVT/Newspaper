@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>{% block title %}每日新闻{% endblock %}</title>
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/assets/site.css">
   <script defer src="/assets/site.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳至正文</a>
   <header class="masthead">
-    <a class="wordmark" href="/">每日新闻</a>
+    <a class="wordmark" href="/">{{ site_name }}</a>
     <nav class="site-nav" aria-label="主导航">
-      <a href="/archive/">往期日报</a>
+      <a href="/archive/">往期新闻</a>
       <a href="/feed.xml">订阅</a>
       <button id="theme" type="button" aria-label="切换深浅配色">配色</button>
     </nav>

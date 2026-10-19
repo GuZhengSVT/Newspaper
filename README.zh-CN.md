@@ -1,97 +1,130 @@
 # Newspaper
 
-一个可独立部署在 VPS 上的每日新闻发布项目：DSH 按需检索和补查 → 事实整理、去重及复核 → 标准 JSON → Markdown、静态网页与 RSS → 邮件和 Telegram 通知。
+[English](README.md)
 
-模型默认为 `d1api/deepseek-v4.1-flash`，检索及原文抓取由 `dsh-free-search` 插件提供。默认由 AI 规划查询，程序调用 DSH 插件的 Bing、AnySearch、Exa 搜索和抓取接口，任务完成就退出；可选 headless 模式用于需要自由补查的部署，网站由 Caddy 单独提供服务。无需保持电脑、Codex 会话或 DSH 网页服务运行。
+可独立部署的新闻方案：按自定义板块检索，经过证据核验和复核，生成网页、Markdown、JSON、RSS，并按任务发送邮件和 Telegram。支持日报、周报、月报及每隔若干天运行。无需保持电脑或聊天会话开启。
 
-## 安装
+仓库只包含通用代码和虚构配置示例。具体关注内容、订阅来源、提示词、模型账号和收件人由每个部署独立设置。
 
-需要 Linux、Python 3.11+、Node 22.13+，正式部署还需要 systemd 与 Caddy。
+## 安装与配置
+
+需要 Python 3.11+、Node 22.13+；附带的 VPS 部署还需要 systemd、Caddy。
 
 ```bash
 git clone https://github.com/GuZhengSVT/Newspaper.git
 cd Newspaper
 make install
 make check test
+cp config.example.toml config.local.toml
+cp project.example.toml project.local.toml
+cp .env.example credentials.env
 ```
 
-依赖锁定在 `requirements.lock` 和 `package-lock.json`，安装不会自动跟随最新版。DSH 插件的预发布依赖兼容处理说明在 `.npmrc`；升级时必须运行离线配置组合检查和测试。
+三份文件分别负责：
 
-## 配置与运行
+| 文件 | 用途 |
+| --- | --- |
+| `project.local.toml` | 板块分级、检索内容、提示词、筛选、周期、必查来源和首页 |
+| `config.local.toml` | 引用项目文件，设置模型接口、存储路径、网站地址、检索预算、推送开关 |
+| `credentials.env` | 模型密钥、SMTP 账号、收件人、Telegram Token/Chat ID |
 
-正式部署将源码放在 `/opt/Newspaper`，运行 `sudo bash scripts/install-vps.sh`，然后修改：
-
-- `/etc/newspaper/config.toml`：访问网址、模型、搜索参数、板块和推送开关。
-- `/etc/newspaper/credentials.env`：模型密钥、SMTP、收件地址、Bot Token 和 Chat ID。
-
-以上两份配置均在 Git 仓库外。密钥文件权限为 `640`，只允许 root 和项目服务用户读取。配置变量名见 `.env.example`。SMTP 使用已有邮箱服务的授权码或密码，不在 VPS 上自建邮件服务器。
-
-`editorial.example.toml` 提供科技与政治、ACGN 两份日报和 15 个板块，可将其追加到本地配置。也可自行定义 `[[editions]]` 的 `id/name/sections` 与 `[[sections]]` 的 `id/name/scope/batch`。每个启用板块必须恰好属于一份日报；默认每板块规划两组中外文查询，数量由程序限制；可选 headless 模式下同一 batch 的相关板块合并检索。安装默认配置仍不预选内容，空配置不调用模型或推送。
+本地文件已被 Git 忽略。完整设置模板见 [project.example.toml](project.example.toml)。运行配置的 `project_file` 相对于运行配置文件解析；提示词文件相对于项目文件解析。模型可使用自行选择的兼容接口，仓库不绑定个人模型或提供商。
 
 ```bash
+export NEWSPAPER_CONFIG="$PWD/config.local.toml"
+export NEWSPAPER_CREDENTIALS="$PWD/credentials.env"
+export NEWSPAPER_DATA=/tmp/newspaper-data
+export NEWSPAPER_WEB=/tmp/newspaper-web
+.venv/bin/python -m newspaper.cli check-config
+.venv/bin/python -m newspaper.cli schedule
+.venv/bin/python -m newspaper.cli doctor
+.venv/bin/python -m newspaper.cli build
+# 真实检索、调用模型并发布网页，不推送邮件/TG：
+.venv/bin/python -m newspaper.cli run --no-notify
+```
+
+前三条检查命令不检索、不调用模型、不发送消息。`schedule` 展示最近应生成的时段、输出文件标识和推送任务分组。`--no-notify` 仍会正式发布网页，重复运行跳过已发布内容，之后也不会自动补推送。没有启用板块时暂停生成。
+
+## 板块独立定制
+
+`[[groups]]` 定义一级板块的 `id/name/sections`，`[[sections]]` 定义子板块的 `id/name/scope`。每个启用子板块恰好属于一个启用一级板块。两级都支持 `enabled`、`notify` 和 `schedule`，禁用一级板块会禁用其子板块。
+
+每个子板块可单独设置：
+
+- `search.queries`：固定检索词；留空则依据 scope、keywords、languages 及 plan 提示词规划。支持 `{date}`、`{window_start}`、`{window_end}` 日期占位符。`query_count` 控制规划数量（1–8）。
+- `prompts.plan/select/edit/review/repair/compress/collect`：检索规划、初筛、编辑、复核等阶段的附加规则，只作用于对应板块。全局 `[prompts]` 支持直接文本或 `<阶段>_file`，`editorial`/`editorial_file` 用于编辑和证据阶段。不能绕过证据校验。
+- `filter.importance`：重大/重要；`reliability`：A/B；`exclude_keywords`：按字面包含关系排除；`require_primary`：核心事实必须使用官方一手证据。
+- `format`：普通/重大新闻各自的字符数和段落上限；超长内容经过限定次数的压缩和复核。
+- `sources`：`rss` 支持 RSS/Atom，`index` 从网页目录发现链接，`page` 查阅该网址本身。`required = true` 表示必须成功读取，读取失败会使该份发布失败，不冒充已查阅；成功读取但没有近期条目的 feed 可以为空。查阅成功不代表其中新闻一定入选。
+
+必查来源优先使用目录预算；必查数量超预算会报错，不会静默遗漏。目录发现和搜索发现的原文共享抓取预算，仍须符合报道时段、筛选和证据复核要求。
+
+## 生成周期与推送任务
+
+设置按全局 `[schedule]` → 一级板块 `[groups.schedule]` → 子板块 `[sections.schedule]` 继承。时间使用 `project.timezone`，例如 `Asia/Shanghai`。
+
+```toml
+[sections.schedule]
+period = "weekly"
+weekday = "mon"
+time = "09:00"
+# start_date = "2027-01-04"
+```
+
+| 周期 | 配置 | 报道范围 |
+| --- | --- | --- |
+| 日报 `daily` | time | 前一天同一时间至本次时间 |
+| 周报 `weekly` | weekday（mon 到 sun）、time | 上周同一时间至本次时间 |
+| 月报 `monthly` | month_day（1–31）、time | 上月同一时间至本次时间 |
+| 定期 `interval` | every_days（1–30）、必填带引号的 start_date、time | 前 N 天至本次时间 |
+
+周一 09:00 周报会在周一 09:00 开始生成，内容覆盖前一个周一 09:00 至本次周一 09:00，成功后推送。`start_date` 限定最早允许发布的日期，首期仍查阅完整前一周期。月度日期超过当月天数时使用当月最后一天。停机后只补最近一期，不连续生成全部错过的期数。
+
+**推送按“周期＋起始设置”分任务，与一级板块无关。** 周期、时刻、周几/月几日/间隔锚点及可选 start_date 一致的内容合并为一封邮件、一条 TG。日报、周报、月报分别推送；周三周报与周五周报分别推送；相同周期但不同时间也分别推送。同一一级板块内不同周期的子板块分别生成。历史去重按任务隔离，日报中的事件仍可成为独立周报的候选。
+
+任务先持久记录所有应生成的内容，全部完成后推送；部分失败或进程重启会继续等待、恢复。已确认成功的渠道不重复发送，仅对明确失败的渠道按退避间隔重试，最多五次。如果连接中断导致无法确认对方是否已接收，状态设为 `uncertain`，停止自动重发。需通过 `status` 和实际收件情况核实，避免为了重试而重复发送。Telegram 无法提供绝对的端到端恰好一次保证。迁移的已发布内容和无推送预览不会自动补发。
+
+在运行配置中启用邮件或 TG，密钥变量见 [.env.example](.env.example)。SMTP 使用已有邮箱服务，支持 STARTTLS/SSL。通知包含阅读和下载链接，不附完整正文。`notify = false` 保留网页生成，但从推送内容中排除该板块。
+
+## 首页与订阅
+
+`[homepage] mode = "groups"` 直接展示一级板块正文，`groups` 列表控制显示范围和顺序。`mode = "sections"` 配合 `sections` 列表展示指定子板块；`mode = "index"` 仅显示各期链接。首页按子板块组合最新保留的一期，因此周报/月报会显示到下一次更新。每个板块带原期日期及链接；最新一期为空时不会复活更旧新闻。
+
+界面支持目录、手机布局、明暗模式、归档搜索、Markdown/JSON 下载。目前界面文案与 Schema 枚举采用中文。综合 RSS 为 `/feed.xml`，一级板块 RSS 为 `/feed-<一级ID>.xml`。正文路径为 `/daily/YYYY-MM-DD/<发布ID>/`，下载为 `/downloads/YYYY-MM-DD/<发布ID>.md` 或 `.json`；分周期后的发布 ID 可通过 `schedule` 查看。
+
+## VPS 部署和维护
+
+源码放在 `/opt/Newspaper` 并安装依赖，运行 `sudo bash scripts/install-vps.sh`，再修改 `/etc/newspaper` 内的配置后启用定时器。
+
+| 路径 | 内容 |
+| --- | --- |
+| `/opt/Newspaper` | 通用源码及依赖 |
+| `/etc/newspaper/config.toml` | 运行配置 |
+| `/etc/newspaper/project.local.toml` | 私有项目偏好 |
+| `/etc/newspaper/credentials.env` | 密钥及收件人 |
+| `/var/lib/newspaper` | 数据库、新闻、证据、临时目录 |
+| `/srv/newspaper` | 当前静态网站 |
+
+```bash
+sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli check-config
+sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli schedule
+sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli build
 sudo systemctl enable --now newspaper.timer newspaper-clean.timer newspaper-notify.timer
-sudo systemctl list-timers 'newspaper*'
+sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli status
 ```
 
-生成任务在每天北京时间 **12:00 开始**，通过复核后才发布和推送。清理任务在午夜运行，并每五分钟补检；推送重试每五分钟运行，已确认成功的通知不重复发送。远端请求超时可能造成发送结果不明确，不能保证所有异常情况下都绝对无重复。
+命令在源码目录执行，或先将项目安装到虚拟环境。定时器每分钟检查任务，已发布时段直接跳过。单份失败至少等五分钟，六小时内最多三次失败尝试，不影响其他份继续运行。模型瞬时网络/HTTP 错误另有最多三次请求重试；systemd 单轮最长50分钟。推送重试、清理每五分钟运行，午夜及生成前也清理。所有写入任务共用进程锁。
 
-网页为只读静态站点，首页左右两栏直接展示当天科技与政治、ACGN 正文，手机端纵向排列。支持文章目录、明暗配色、分类归档搜索、Markdown/JSON 下载与 RSS。当前部署模板使用 IP 的 HTTP 访问；有域名后可以改为 HTTPS。若需要密码保护，应与 HTTPS 一起配置。
+附带 Caddy 配置使用80端口 HTTP，请按部署调整 `base_url`、域名、HTTPS、访问认证及防火墙。网站只暴露生成的公开文件，不暴露密钥、证据或管理接口。网站原子切换，构建失败保留上一完整版本；已复核的保存稿件恢复发布时不重新调用模型。
 
-## 内容与发布
+## 核验和保留期限
 
-`prompts/editorial.md` 是总编辑规则；其余提示词分别负责采集、候选筛选、编辑和复核。只发布“重大/重要”新闻，可靠性标记 A/B，C 类传闻排除；空板块在网页和 Markdown 中隐藏。基础学科提供面向普通本科生的详细解释，政治报道保持事实中性，新番和社区话题必须注明评价来源及样本限制。
+默认 bounded 模式通过固定版本 DSH 搜索插件完成检索和原文抓取，依次执行规划、初筛、取证、编辑、引文/日期/历史校验、独立模型复核。摘要只用于发现线索，不能作为发布证据；每项事实必须有匹配原文的引文，多源声明还需不同域名及语义独立性复核。限定次数修订后仅发布逐条通过的新闻。检索失败不能当作“无新闻”成功。自动核验仍不能保证事实绝对正确。
 
-可将 `discovery.example.toml` 追加到本地配置，按板块维护发布者更新目录（HTML、RSS、Atom）。每份日报最多检查6个目录，每个最多发现3个候选链接；这些链接和搜索结果走同一套筛选、原文抓取和核验流程，不能直接当成新闻发布。目录让尚未被搜索引擎收录的新公告也有机会入选。实际原文抓取仍受每份24个来源的预算限制。
+仅保留入选来源元数据、引文和相邻上下文。未入选网页、中间稿、DSH 会话/缓存在单次任务结束后删除，异常残留由清理任务回收。运行指标只留计数、结果和用量，不留响应正文或凭据。
 
-`prompts/` 下保存各阶段提示词，`schemas/report.schema.json` 定义标准日报。程序再次通过插件抓取选定来源，要求每条事实附有能在抓取原文中找到的引文，并检查报道窗口、历史重复和来源编号。模型复核负责语义、来源独立性和日期口径，不能保证新闻事实绝对正确。
+保留发布当日及此前规则对应的30个日历日期，以项目时区计算；重建和重试不延长寿命。清理涵盖过期正文、证据、网页、下载、RSS、搜索索引、事件、推送队列、运行记录和旧网站版本，SQLite 使用安全删除并回收空间。新闻不进入 Git、不作为 CI 产物上传，本项目不备份新闻。读者下载和第三方服务已保存的副本不受服务器删除控制。
 
-同一任务共享规范化 URL 的抓取缓存，相同正文去重。先用搜索摘要筛选待核验候选，最多抓取每份24个来源，再发送相关原文片段给编辑；摘要不能作为发布证据；复核只读取成稿、引用及相邻上下文。候选由程序分配短标识，成稿通过该标识绑定稳定事件键，避免模型改写名称后被误判为未入选；修订通过允许处理的原事件键绑定，不能移动或新增事件。复核后的内容修订只替换受影响的新闻，结构校验失败可完整重试一次；这次重试不占用独立的一次证据复核修订机会。复核未接受的空稿不能作为“无新闻”成功发布。SQLite 用实体索引和稳定事件键检索相关历史，只向模型发送相关事件的精简事实，避免整月全文重传。逐条检查引文存在；每项事实单独标记核验方式；官方一手材料可单源直接支持，标记多源互证的事实需引用不同来源域名，来源是否真正独立仍由证据复核判断。相同主体的重要后续需明确新增事实。
+`make check test` 使用合成资料和模拟发送，离线检查日历、任务合并、防重复、重启恢复、筛选、证据、首页、清理与渲染，不发送真实邮件/TG。保留有用回归测试，仅清理临时探针和缓存。依赖固定在两个 lock 文件中，升级时同步检查 DSH 配置。
 
-运行指标保存直接模型接口返回的 usage、各阶段输入字符数与耗时。指标另记录各搜索引擎的结果、空结果、限流或故障状态，以及候选数、原文可得数、程序淘汰原因和逐轮复核结果。Exa 等引擎返回429后，本次搜索进程停止继续请求该引擎，其余引擎继续工作；不能把接口有返回当成已覆盖到当天新闻。搜索摘要缺失时间可作为待取证线索保留，日期和事实须由原文确认；HTML 结构化 `datePublished` 会在清理脚本标签前提取，搜索索引时间仍单独标为未核实。
-
-默认 bounded 模式没有额外 DSH 模型调用，规划、筛选、编辑、复核用量统一记录；可选 headless 模式未返回可汇总用量时记录 null，不能把直接调用的 Token 误当成该模式整次任务总费用。
-
-日报 JSON 是内容依据，Markdown 和网页由同一份数据构建。构建成功后原子切换网站版本，旧构建立即删除。全局结构或复核覆盖不完整等失败不会被当成成功发布；个别新闻的引文或证据不合格则剔除该条，只发布最终逐条复核明确通过的新闻，推送失败只重试通知，不重新生成日报。历史 Markdown 可用 `newspaper import-legacy` 导入，原文字节保留，原始 Markdown 下载保持不变。
-
-## 30 天删除规则
-
-保留当天与此前 29 天的日报，某期在其日期加 30 天的北京时间零点过期，重建和重试不会延长寿命。
-
-抓取页面、未入选材料、候选计划、中间稿、DSH 会话及工具输出仅在任务临时目录存在，结束即删除。仅保留入选新闻的 `evidence.json`（来源元数据、引文和短上下文）用于追溯，不保存完整网页或模型思考过程。
-
-清理覆盖证据资料、JSON、Markdown、网页、下载文件、RSS、搜索索引、旧构建、事件去重记录、推送记录及过期运行记录。DSH 的 HOME、会话、缓存和诊断输出置于单次任务临时目录，结束后删除；异常残留在下一次清理时删除。数据库启用 `secure_delete` 并整理回收空间。
-
-**新闻数据不进入 Git，不上传到 CI，不由本项目备份。** 如 VPS 的整机快照或其他备份也受该要求约束，应单独排除数据与网站目录。已经被读者下载、缓存或由第三方服务留存的副本不受 VPS 控制，所以邮件和 Telegram 默认只发送日期及阅读链接，不附新闻全文。
-
-## 目录
-
-```text
-/opt/Newspaper       源码、提示词、模板、Schema、测试
-/etc/newspaper       本地配置与凭据，不入 Git
-/var/lib/newspaper   SQLite、分日期/日报类型的正文与证据，不入 Git
-/srv/newspaper       当前网站构建，不入 Git
-```
-
-首页只展示北京时间当天已经发布的日报；未发布时显示待发布状态，不用往期内容冒充当天。点击两栏标题进入 `/archive/technology-politics/` 或 `/archive/acgn/`，`/archive/` 可检索全部往期。桌面目录位于侧栏，窄屏折叠在正文上方。
-
-每条新闻只渲染 `facts.text`，来源去重后在该条末尾简短列出，不在段间重复引用。普通新闻最多3段、420字符，重大新闻最多4段、650字符，基础学科最多6段、1100字符；事实条目与阅读段落分别处理，多条简短事实会在展示时合并为自然段，不因条目数多而淘汰新闻。超过字符上限时只定向压缩事实文字，程序保留原条目的证据和核验方式，再进行事实复核；不会让模型重写引用。
-
-两份日报路径为 `/daily/YYYY-MM-DD/technology-politics/` 和 `/daily/YYYY-MM-DD/acgn/`，下载路径对应 `/downloads/YYYY-MM-DD/<类型>.md`（也支持 `.json`）。历史单份日报路径继续有效。
-
-`/feed.xml` 为合并 RSS，`/feed-technology-politics.xml` 和 `/feed-acgn.xml` 可分别订阅。
-
-预览命令（照常发布网页和文档，但不创建或发送邮箱/TG 通知）：
-
-```bash
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli run --no-notify
-```
-
-同日同类型已经发布则跳过，不覆盖正文，也不补发预览通知。某份失败不会阻止另一份继续；整体返回失败状态供 systemd 识别。
-
-手动补发可通过 `run --cutoff 2026-10-19T21:03:11+08:00` 指定本日中午至当前时刻之间的截止时间，必须包含时区。两份日报使用同一个截止时间，开始时间仍为前一天中午；常规定时任务仍截止当天12点。该参数不覆盖已发布的日报，也不绕过筛选、核验或复核。
-
-详细运维、环境变量与测试说明见 [英文说明](README.md)。本项目采用 MIT 许可证；DSH 及其插件保留各自许可证。
-
-上游中断处理：模型请求遇到 HTTP 429/502/503/504 或连接中断等传输错误时，最多尝试3次，间隔15秒、60秒。日报 systemd 任务失败后每5分钟重试，6小时内最多启动3轮；单轮最长50分钟。已发布的日报跳过，推送仅重试出站队列，不重生成新闻。永久接口错误不在单次请求内反复尝试。
-
-已通过审核、但网页构建失败的 `ready` 稿件会从保存的证据恢复发布，不再次调用模型。搜索索引中的时间只是未经核实的线索，以原文为准。覆盖说明和审核记录保留在结构化数据中，页面不展示泛化免责声明。关键事实归属与适用条件写入正文。
+MIT 许可证。DSH 与插件保留各自许可证。

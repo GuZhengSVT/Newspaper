@@ -1,14 +1,16 @@
 {% extends 'base.html' %}
 {% from 'parts.html' import articles, contents %}
 {% block body %}
-<div class="date-bar"><h1><time datetime="{{ today }}">{{ today_label }}</time></h1><span>北京时间</span></div>
+<div class="date-bar"><h1><time datetime="{{ today }}">{{ today_label }}</time></h1><span>{{ timezone_label }}</span></div>
 <div class="reading-layout home-layout">
   {{ contents(toc_groups) }}
   <div class="news-columns">
   {% for column in columns %}
     <section class="news-column" id="{{ column.anchor }}" data-outline>
-      <header class="column-heading"><h2><a href="/archive/{{ column.id }}/" aria-label="查看{{ column.label }}往期日报">{{ column.label }}</a></h2><a class="history-link" href="/archive/{{ column.id }}/">往期</a></header>
-      {% if column.view %}{{ articles(column.view, true) }}{% else %}<p class="empty-state">今日尚未发布。</p>{% endif %}
+      <header class="column-heading"><h2><a href="/archive/{{ column.id }}/" aria-label="查看{{ column.label }}往期新闻">{{ column.label }}</a></h2><a class="history-link" href="/archive/{{ column.id }}/">往期</a></header>
+      {% if column.index_only %}
+      {% for issue in column.issues %}<p><a href="{{ issue.url }}">{{ issue.title }}</a> · {{ issue.date }}</p>{% else %}<p class="empty-state">尚未发布。</p>{% endfor %}
+      {% elif column.view %}{{ articles(column.view, true) }}{% else %}<p class="empty-state">{{ '尚未发布。' if column.sections else '今日尚未发布。' }}</p>{% endif %}
     </section>
   {% endfor %}
   </div>

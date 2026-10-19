@@ -1,0 +1,29 @@
+# Optional publisher indexes. Append to the local configuration outside Git.
+# Index entries only discover candidates; originals must still pass evidence review.
+[discovery]
+max_indexes_per_edition = 6
+max_links_per_index = 3
+
+[[discovery.sources]]
+section_id = "ai"
+url = "https://www.minimax.cn/blog"
+
+[[discovery.sources]]
+section_id = "ai"
+url = "https://www.anthropic.com/news"
+
+[[discovery.sources]]
+section_id = "ai"
+url = "https://openai.com/news/rss.xml"
+
+[[discovery.sources]]
+section_id = "games"
+url = "https://www.gematsu.com/feed"
+
+[[discovery.sources]]
+section_id = "anime"
+url = "https://www.animenewsnetwork.com/all/rss.xml"
+
+[[discovery.sources]]
+section_id = "acgn-community"
+url = "https://prtimes.jp/index.rdf"

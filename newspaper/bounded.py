@@ -12,12 +12,13 @@ from .config import ROOT
 from .evidence import validate_selection
 from .model import parse_json
 from .research import source_url, fetch_source
+from .discovery import discover
 
 
 def search(settings, queries: list[dict], work: Path) -> list[dict]:
     work.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(['node',str(ROOT/'scripts/search.mjs')],
-        input=json.dumps({'queries':queries,'engines':settings.values.get('search',{}).get('engines',['bing','exa'])}),
+        input=json.dumps({'queries':queries,'engines':settings.values.get('search',{}).get('engines',['bing','anysearch','exa'])}),
         text=True,capture_output=True,check=True,timeout=max(45,len(queries)*12+30),
         env={**os.environ,'RESEARCH_CACHE_DIR':str(work/'cache'),'NODE_OPTIONS':'--max-old-space-size=128'})
     return parse_json(result.stdout)['results']
@@ -48,6 +49,8 @@ def research(settings, client, window: dict, work: Path, cache: dict) -> tuple[l
         or {q['section_id'] for q in queries}!=section_ids):
         raise ValueError('Invalid search plan or missing section')
     results=search(settings,queries,work)
+    indexes,discovery_metrics=discover(settings,window,work)
+    results.extend(indexes)
     previews={}
     url_ids={}
     coverage=[]
@@ -76,8 +79,13 @@ def research(settings, client, window: dict, work: Path, cache: dict) -> tuple[l
         if candidate['source_ids']:kept.append(candidate)
         else:coverage.append('部分候选原文无法取得，已放弃报道，不能据此判断该板块没有重要事件。')
     if candidates and not sources:raise ValueError('No selected originals accessible')
+    engine_status={}
+    for result in results:
+        for status in result.get('engine_status',[]):
+            key=status['engine']+':'+status['status'];engine_status[key]=engine_status.get(key,0)+1
     metrics={'plugin_queries':len(queries),'search_engines_ok':sum(r['engines_ok'] for r in results),
-             'result_urls':len(previews),'fetched_sources':len(sources)}
+             'result_urls':len(previews),'fetched_sources':len(sources),'selected_candidates':len(candidates),
+             'candidates_with_originals':len(kept),'engine_status':engine_status,**discovery_metrics}
     return sources,kept,coverage,results,metrics
 
 

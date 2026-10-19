@@ -131,10 +131,20 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                     contexts = sources
             feedback = {}
             repair_keys = None
-            for attempt in range(2):
+            for index, candidate in enumerate(candidates, 1):
+                candidate['candidate_id'] = 'c' + str(index)
+            metrics['candidate_keys'] = [c['event_key'] for c in candidates]
+            editor_schema = copy.deepcopy(SCHEMA)
+            editor_schema['$defs']['article']['properties']['candidate_id'] = {'type': 'string'}
+            if edition['id']:
+                editor_schema['$defs']['article']['required'].append('candidate_id')
+            validation_failures = 0
+            review_rounds = 0
+            length_repaired = False
+            for attempt in range(3):
                 payload = {"window": window, "edition": edition, "sections": settings.sections,
                            "sources": contexts, "candidates": candidates,
-                           "history": history, "schema": SCHEMA, "feedback": feedback}
+                           "history": history, "schema": editor_schema, "feedback": feedback}
                 if attempt and repair_keys and edition["id"]:
                     scoped_candidates = [c for c in candidates if c["event_key"] in repair_keys]
                     repair_contexts = selected_sources(sources, scoped_candidates) if edition["id"] else contexts
@@ -156,13 +166,18 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                                   for src in contexts if src["id"] in used]
                 try:
                     if edition["id"]:
+                        restore_event_keys(doc, candidates)
+                        metrics.setdefault("drafts", []).append({"attempt": attempt + 1,
+                            "articles": sum(len(s["articles"]) for s in doc["sections"])})
                         doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
-                                                      {c["event_key"] for c in candidates})
+                                                      {c["event_key"] for c in candidates},
+                                                      diagnostics=metrics.setdefault("article_rejections", []))
                     else:
                         validate_report(doc, settings, contexts, history, window)
                     if edition["id"]:
                         length_problems = style_issues(doc)
-                        if length_problems and attempt == 0:
+                        if length_problems and not length_repaired:
+                            length_repaired = True
                             keys = {p["event_key"] for p in length_problems}
                             shortened = copy.deepcopy(doc)
                             for sec in shortened["sections"]:
@@ -174,7 +189,9 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                             doc = apply_repair(doc, patch, keys)
                         oversized = {p["event_key"] for p in style_issues(doc)}
                         doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
-                                                      {c["event_key"] for c in candidates} - oversized)
+                                                      {c["event_key"] for c in candidates},
+                                                      diagnostics=metrics.setdefault("article_rejections", []),
+                                                      oversized=oversized)
                         planned = {c["event_key"] for c in candidates}
                         if any(a["event_key"] not in planned for sec in doc["sections"] for a in sec["articles"]):
                             raise ValueError("Unselected event in report")
@@ -184,13 +201,24 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                             raise ValueError("Previously published event")
                 except (ValueError, ValidationError) as exc:
                     feedback = {"validation_error": str(exc)[:300]}
-                    if attempt == 0:
+                    metrics.setdefault('validation_errors', []).append(type(exc).__name__ + ': ' +
+                        (str(exc.validator) if isinstance(exc, ValidationError) else str(exc)[:180]))
+                    validation_failures += 1
+                    if validation_failures == 1:
+                        repair_keys = None
                         continue
                     raise
                 evidence = used_evidence(doc, contexts)
                 review = client.request("review", {"window": window, "sections": settings.sections,
                     "report": doc, "sources": evidence, "history": history, "candidates": candidates,
                     "collection_status": {"any_original_fetched": bool(sources), "coverage_notes": coverage}})
+                metrics.setdefault("reviews", []).append({"attempt": attempt + 1,"ok": review.get("ok"),
+                    "problems": [str(p)[:200] for p in review.get('problems', [])[:5]],
+                    "research_queries": len(review.get('research_queries', [])),
+                    "articles": [{"event_key": r.get("event_key"),"ok": r.get("ok"),
+                                  "problems": [str(p)[:200] for p in r.get("problems", [])[:3]]}
+                                 for r in review.get("article_reviews", [])]})
+                review_rounds += 1
                 if (review.get("ok") is True and not review.get("problems") and not review.get("research_queries")
                     and (not edition["id"] or review.get("summary_ok") is True)):
                     if edition["id"]:
@@ -198,9 +226,11 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         if sum(len(s["articles"]) for s in checked["sections"]) != sum(len(s["articles"]) for s in doc["sections"]):
                             raise ValueError("Contradictory final review verdicts")
                     break
-                if attempt == 1:
+                if review_rounds == 2:
                     if edition["id"]:
                         doc = keep_approved(doc, review)
+                        if not any(s['articles'] for s in doc['sections']):
+                            raise ValueError('Final review did not approve any articles or an empty edition')
                         validate_report(doc, settings, contexts, history, window)
                         break
                     raise ValueError("Evidence review rejected the report")
@@ -225,6 +255,8 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                             if candidate["section_id"] == query["section_id"]:
                                 candidate["source_ids"] += [s["id"] for s in extra_sources]
                         contexts = selected_sources(list({s["id"]: s for s in sources}.values()), candidates) if edition["id"] else sources
+            else:
+                raise ValueError('Report exhausted bounded validation and review retries')
             directory = settings.data / "editions" / key
             directory.mkdir(parents=True, exist_ok=True)
             atomic_json(directory / "report.json", doc)
@@ -235,6 +267,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
             store.db.execute("DELETE FROM editions WHERE day=? AND status!='published'", (key,))
             store.db.commit()
             store.add(doc)
+            record_stage("build")
             build(store.settings, store)
             store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
             if notify:
@@ -258,8 +291,22 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
         store.db.commit()
 
 
+def restore_event_keys(doc: dict, candidates: list[dict]) -> None:
+    """Bind drafts to the selected event by a short ID; never rewrite article facts."""
+    selected = {c['candidate_id']: c for c in candidates if c.get('candidate_id')}
+    for section in doc['sections']:
+        for article in section['articles']:
+            reference = article.pop('candidate_id', None)
+            if reference is None:continue
+            candidate = selected.get(reference)
+            if candidate is None or candidate['section_id'] != section['id']:
+                raise ValueError('Unknown or moved candidate reference')
+            article['event_key'] = candidate['event_key']
+
+
 def filter_invalid_articles(doc: dict, settings: Settings, sources: list[dict], history: list[dict],
-                            window: dict, allowed: set[str]) -> dict:
+                            window: dict, allowed: set[str], diagnostics: list | None = None,
+                            oversized: set[str] | None = None) -> dict:
     """A bad quotation excludes its article, never weakens evidence requirements."""
     base = copy.deepcopy(doc)
     for section in base["sections"]:
@@ -276,9 +323,17 @@ def filter_invalid_articles(doc: dict, settings: Settings, sources: list[dict], 
                 single = copy.deepcopy(base)
                 single["sections"][index]["articles"] = [article]
                 validate_report(single, settings, sources, history, window)
-                if article["event_key"] not in allowed or normalize(article["event_key"]) in seen:
-                    raise ValueError("Unselected or repeated event")
-            except (ValueError, ValidationError):
+                if article['event_key'] in (oversized or set()):
+                    raise ValueError('Article exceeds public length limit')
+                if article["event_key"] not in allowed:
+                    raise ValueError("Unselected event")
+                if normalize(article["event_key"]) in seen:
+                    raise ValueError('Repeated event')
+            except (ValueError, ValidationError) as exc:
+                if diagnostics is not None:
+                    reason = ('schema:' + str(exc.validator) + ':' + '/'.join(map(str, exc.absolute_path))
+                              if isinstance(exc, ValidationError) else str(exc)[:180])
+                    diagnostics.append({"event_key": article.get("event_key"), "reason": reason})
                 rejected = True
                 continue
             seen.add(normalize(article["event_key"]))
@@ -340,9 +395,9 @@ def apply_repair(doc: dict, patch: dict, allowed: set[str]) -> dict:
         section = next((s for s in result["sections"] if s["id"] == item["section_id"]), None)
         if section is None or not any(a["event_key"] == key for a in section["articles"]):
             raise ValueError("Repair moved or invented an event")
-        replacement = item["article"]
-        if replacement is not None and replacement["event_key"] != key:
-            raise ValueError("Repair changed event identity")
+        replacement = copy.deepcopy(item["article"])
+        if replacement is not None:
+            replacement['event_key'] = key
         section["articles"] = [replacement if a["event_key"] == key else a for a in section["articles"]
                                if a["event_key"] != key or replacement is not None]
         if section["articles"]:

@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from datetime import datetime
 
 from .config import ROOT, Settings
 from .model import parse_json
@@ -116,22 +117,72 @@ def collect(settings: Settings, section: dict, window: dict, work: Path, supplem
     return result
 
 
+def fetch_page(settings: Settings, url: str, work: Path) -> dict:
+    url = source_url(url)
+    env = {**os.environ, "RESEARCH_CACHE_DIR": str(work / "cache"), "NODE_OPTIONS": "--max-old-space-size=128"}
+    result = subprocess.run(
+        ["node", str(ROOT / "scripts" / "fetch.mjs")], input=json.dumps({"url": url}),
+        capture_output=True, text=True, env=env,
+        timeout=settings.values.get("search", {}).get("timeout_seconds", 35) + 5, check=True)
+    return parse_json(result.stdout)
+
+
+class PublicationParser(HTMLParser):
+    """Read publisher timestamps that would otherwise disappear with script tags."""
+    def __init__(self):
+        super().__init__(); self.script = None; self.dates = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'script' and attrs.get('type') == 'application/ld+json':
+            self.script = []
+        if tag == 'meta' and attrs.get('property', attrs.get('name', '')).lower() in {
+            'article:published_time', 'datepublished', 'pubdate'}:
+            self.dates.append(attrs.get('content', ''))
+
+    def handle_data(self, text):
+        if self.script is not None:self.script.append(text)
+
+    def handle_endtag(self, tag):
+        if tag != 'script' or self.script is None:return
+        try:self.walk(json.loads(''.join(self.script)))
+        except (ValueError, TypeError):pass
+        self.script = None
+
+    def walk(self, value):
+        if isinstance(value, list):
+            for item in value:self.walk(item)
+        elif isinstance(value, dict):
+            types = value.get('@type', [])
+            if isinstance(types, str):types = [types]
+            if any(t in {'Article', 'NewsArticle', 'BlogPosting', 'TechArticle'} for t in types):
+                self.dates.append(value.get('datePublished', ''))
+            for key in ['@graph', 'mainEntity']:
+                if key in value:self.walk(value[key])
+
+
+def publication_time(content: str) -> str | None:
+    parser = PublicationParser();parser.feed(content)
+    for value in parser.dates:
+        try:
+            date = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            if date.tzinfo is not None:return date.isoformat()
+        except (ValueError, AttributeError, TypeError):pass
+    return None
+
+
 def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None:
     try:
         url = source_url(candidate["url"])
-        env = {**os.environ, "RESEARCH_CACHE_DIR": str(work / "cache"), "NODE_OPTIONS": "--max-old-space-size=128"}
-        result = subprocess.run(
-            ["node", str(ROOT / "scripts" / "fetch.mjs")],
-            input=json.dumps({"url": url}), capture_output=True, text=True, env=env,
-            timeout=settings.values.get("search", {}).get("timeout_seconds", 35) + 5, check=True,
-        )
-        data = parse_json(result.stdout)
+        data = fetch_page(settings, url, work)
         text = page_text(data["content"], data["kind"])
         if len(text) < 100:
             return None
+        published = publication_time(data['content']) if data['kind'] == 'html' else None
+        if published:text = '页面元数据 datePublished: ' + published + '\n' + text
         return {"id": "s-" + hashlib.sha256(url.encode()).hexdigest()[:16], "url": url,
                 "title": str(candidate.get("title", ""))[:300],
-                "published_at": None, "search_published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat()}
+                "published_at": published, "search_published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat()}
     except (ValueError, KeyError, subprocess.SubprocessError):
         return None
 

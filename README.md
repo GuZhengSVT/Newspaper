@@ -160,3 +160,13 @@ Individual articles with invalid quotations or other evidence violations are exc
 The Chinese-only homepage shows today’s technology/politics and ACGN articles side by side; mobile screens stack the columns. Category headings open `/archive/technology-politics/` and `/archive/acgn/`; `/archive/` searches all retained issues. Missing editions remain pending rather than falling back to yesterday. A desktop contents sidebar becomes collapsible on narrow screens, and light/dark palettes follow the device preference until explicitly chosen.
 
 HTML and Markdown share the same article-body view. Sources appear once at each article’s end with short labels; repeated summaries, promotional copy and generic disclaimers are omitted. Evidence quotations and editorial notes remain in structured data. Ordinary stories allow at most 3 paragraphs / 420 characters, major stories 4 / 650, and foundational science 6 / 1100. Overlong stories receive one targeted shortening pass, undergo evidence validation and semantic review, and are excluded if still over budget.
+
+### Discovery coverage and diagnostics
+
+The bounded runner uses the pinned DSH plugin for Bing, AnySearch and Exa. Rate-limited engines cool down for the rest of the search process while other engines continue. Per-engine outcomes distinguish results, empty responses, rate limits and failures; a successful HTTP request does not establish coverage of current events.
+
+Append `discovery.example.toml` to local configuration to discover article links directly from publisher HTML indexes, RSS or Atom feeds. At most 6 indexes and 3 links per index are checked per edition; selected originals still share the 24-source fetch budget and the normal evidence review. This helps cover releases that search engines have not indexed yet. Search snippets with missing dates remain provisional leads rather than being rejected before fetching. Publisher JSON-LD/meta timestamps survive HTML cleanup; search dates remain unverified hints.
+
+Run metrics retain candidate counts, draft counts, program rejection reasons and review verdicts for 30 days, without full source pages or discarded drafts.
+
+Candidates receive short program-assigned IDs so draft wording cannot accidentally change event identity. Canonical event keys are restored before validation; repair targets remain restricted to explicitly allowed existing events. One structural retry and one semantic repair have separate budgets (at most three draft passes). A rejected empty draft is a failed run rather than a successful no-news edition.

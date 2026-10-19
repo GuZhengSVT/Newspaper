@@ -1,33 +1,44 @@
 // Execute only the pinned DSH plugin's keyless engines. No LLM/tool loop or daemon.
-import {searchBing, searchDdgHtml, searchExaMCP} from 'dsh-free-search';
+import {searchBing, searchDdgHtml, searchExaMCP, searchAnysearch} from 'dsh-free-search';
 
-export async function searchQuery(item, engines, timeoutMs = 20000) {
+export async function searchQuery(item, engines, timeoutMs = 20000, state = new Map(), providers = null) {
   const options = {lang: /[\u3400-\u9fff]/.test(item.query) ? 'zh' : 'en', timeRange:{days:2}};
-  const calls = {bing:s => searchBing(item.query, 5, options, s),
-    ddg:s => searchDdgHtml(item.query, 5, options, s), exa:s => searchExaMCP(item.query, 5, s)};
-  const settled = await Promise.allSettled(engines.map(engine => {
+  const calls = providers || {bing:s => searchBing(item.query, 5, options, s),
+    ddg:s => searchDdgHtml(item.query, 5, options, s), exa:s => searchExaMCP(item.query, 5, s),
+    anysearch:s => searchAnysearch(item.query, 5, s)};
+  const active = engines.filter(engine => !state.has(engine));
+  const settled = await Promise.allSettled(active.map(engine => {
     if (!calls[engine]) throw Error('Unsupported search engine');
     return calls[engine](AbortSignal.timeout(timeoutMs));
   }));
   const sources = new Map(); let ok = 0;
-  for (const result of settled) {
-    if (result.status !== 'fulfilled') continue;
+  const engine_status = engines.filter(engine => !active.includes(engine)).map(engine => ({engine,status:state.get(engine)}));
+  for (const [i,result] of settled.entries()) {
+    const engine = active[i];
+    if (result.status !== 'fulfilled') {
+      const status = /429|rate.limit/i.test(String(result.reason)) ? 'rate_limited' : 'unavailable';
+      if (status === 'rate_limited') state.set(engine,status);
+      engine_status.push({engine,status});
+      continue;
+    }
     ok++;
+    engine_status.push({engine,status:result.value.sources?.length ? 'results' : 'empty'});
     for (const s of result.value.sources || []) {
       if (typeof s.url !== 'string' || !s.url.startsWith('https://')) continue;
       if (!sources.has(s.url)) sources.set(s.url,{url:s.url,title:String(s.title||'').slice(0,300),
         snippet:String(s.snippet||'').slice(0,800),published_at:s.publishedAt||null});
     }
   }
-  return {section_id:item.section_id,query:item.query,engines_ok:ok,sources:[...sources.values()]};
+  return {section_id:item.section_id,query:item.query,engines_ok:ok,engine_status,sources:[...sources.values()]};
 }
 
 async function main() {
   let input='';for await (const chunk of process.stdin) input+=chunk;
-  const {queries,engines=['bing','exa']}=JSON.parse(input);
-  if (!Array.isArray(queries)||queries.length>40||!engines.length||engines.length>3||engines.some(e=>!['bing','ddg','exa'].includes(e))) throw Error('Invalid search budget');
+  const {queries,engines=['bing','anysearch','exa']}=JSON.parse(input);
+  if (!Array.isArray(queries)||queries.length>40||!engines.length||engines.length>3||engines.some(e=>!['bing','ddg','exa','anysearch'].includes(e))) throw Error('Invalid search budget');
   const results=new Array(queries.length);let next=0;
-  await Promise.all([0,1].map(async()=>{while(next<queries.length){const i=next++;results[i]=await searchQuery(queries[i],engines);}}));
+  const state=new Map();
+  await Promise.all([0,1].map(async()=>{while(next<queries.length){const i=next++;results[i]=await searchQuery(queries[i],engines,20000,state);}}));
   process.stdout.write(JSON.stringify({results}));
 }
 

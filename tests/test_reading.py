@@ -96,8 +96,7 @@ class ReadingTests(unittest.TestCase):
         doc['sections'][0]['articles'].append(short)
         replacement = copy.deepcopy(long)
         replacement['facts'][0]['text'] = '压缩后的事实'
-        repair = {'replacements': [{'section_id': 'fixture', 'event_key': long['event_key'], 'article': replacement}],
-                  'summary': '修订摘要', 'highlights': []}
+        repair = {'articles':[{'event_key':long['event_key'],'facts':[{'index':0,'text':'压缩后的事实'}]}]}
         candidates = [{'event_key': a['event_key'], 'entities': ['Fixture Product'], 'section_id': 'fixture',
                        'importance': '重要', 'source_ids': ['s1']} for a in [long, short]]
         settings = Settings({**self.settings.values, 'editions': [{'id': 'acgn', 'name': 'ACGN', 'sections': ['fixture']}],
@@ -109,12 +108,12 @@ class ReadingTests(unittest.TestCase):
              patch('newspaper.pipeline.Model.request', side_effect=[doc, repair, review]) as model:
             result = generate(settings, self.store, notify=False)
         self.assertEqual(result['state'], 'published')
-        self.assertEqual([call.args[0] for call in model.call_args_list], ['edit', 'repair', 'review'])
+        self.assertEqual([call.args[0] for call in model.call_args_list], ['edit', 'compress', 'review'])
         payload = model.call_args_list[1].args[1]
-        self.assertEqual(payload['event_keys'], [long['event_key']])
-        self.assertEqual(len(payload['report']['sections'][0]['articles']), 1)
+        self.assertEqual([a['event_key'] for a in payload['articles']], [long['event_key']])
         final = self.store.document(self.day+'/acgn')['sections'][0]['articles']
-        self.assertEqual(final, [replacement, short])
+        self.assertEqual(final[0]['facts'],replacement['facts'])
+        self.assertEqual(final[1],short)
 
 
 if __name__ == '__main__':

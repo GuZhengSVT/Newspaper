@@ -170,3 +170,5 @@ Append `discovery.example.toml` to local configuration to discover article links
 Run metrics retain candidate counts, draft counts, program rejection reasons and review verdicts for 30 days, without full source pages or discarded drafts.
 
 Candidates receive short program-assigned IDs so draft wording cannot accidentally change event identity. Canonical event keys are restored before validation; repair targets remain restricted to explicitly allowed existing events. One structural retry and one semantic repair have separate budgets (at most three draft passes). A rejected empty draft is a failed run rather than a successful no-news edition.
+
+Evidence claims and reader-facing paragraphs are separate: short claims are grouped for display, never excluded solely for claim count. The dedicated compression stage edits text by original fact index; the program preserves each fact’s evidence and verification mode, then runs evidence validation and semantic review.

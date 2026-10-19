@@ -13,6 +13,8 @@ from newspaper.bounded import research
 from newspaper.discovery import recent_links
 from newspaper.pipeline import filter_invalid_articles, generate, restore_event_keys
 from newspaper.research import fetch_source, publication_time
+from newspaper.style import style_issues, compact_articles
+from newspaper.reading import report_view
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -121,6 +123,27 @@ class DiscoveryTests(unittest.TestCase):
             result=generate(settings,self.store,notify=False)
         self.assertEqual(result['state'],'partial_failure')
         self.assertFalse(self.store.published(self.day+'/acgn'))
+
+    def test_short_claims_are_grouped_for_reading_instead_of_excluding_the_news(self):
+        doc=editions.EditionTests.issue(self,'acgn');article=doc['sections'][0]['articles'][0]
+        article['facts']=[{**copy.deepcopy(article['facts'][0]),'text':f'合成测试事实{i}。'} for i in range(7)]
+        self.assertEqual(style_issues(doc),[])
+        view=report_view(doc,self.day+'/acgn')['sections'][0]['articles'][0]
+        self.assertLessEqual(len(view['paragraphs']),3)
+        for i in range(7):self.assertIn(f'合成测试事实{i}。',''.join(view['paragraphs']))
+
+    def test_compaction_cannot_replace_evidence_or_verification(self):
+        doc=editions.EditionTests.issue(self,'acgn');article=doc['sections'][0]['articles'][0]
+        original=copy.deepcopy(doc)
+        patch={'articles':[{'event_key':article['event_key'],'facts':[{
+            'index':0,'text':'简洁的合成事实','verification':'single_source','evidence':[]}]}]}
+        result=compact_articles(doc,patch,{article['event_key']})
+        fact=result['sections'][0]['articles'][0]['facts'][0]
+        self.assertEqual(fact['evidence'],article['facts'][0]['evidence'])
+        self.assertEqual(fact['verification'],'official_statement')
+        self.assertEqual(doc,original)
+        patch['articles'][0]['facts'][0]['index']=99
+        with self.assertRaises(ValueError):compact_articles(doc,patch,{article['event_key']})
 
 
 if __name__=='__main__':unittest.main()

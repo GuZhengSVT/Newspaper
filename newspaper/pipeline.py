@@ -13,7 +13,7 @@ from jsonschema import ValidationError
 from .config import TZ, Settings
 from .bounded import research as bounded_research, supplement as bounded_supplement
 from .model import Model
-from .style import style_issues
+from .style import style_issues, compact_articles
 from .evidence import selected_sources, used_evidence, validate_selection
 from .notify import deliver, enqueue
 from .publish import build, markdown
@@ -179,14 +179,13 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         if length_problems and not length_repaired:
                             length_repaired = True
                             keys = {p["event_key"] for p in length_problems}
-                            shortened = copy.deepcopy(doc)
-                            for sec in shortened["sections"]:
-                                sec["articles"] = [a for a in sec["articles"] if a["event_key"] in keys]
-                            patch = client.request("repair", {"window": window, "report": shortened,
-                                "event_keys": list(keys), "sources": used_evidence(shortened, contexts), "schema": SCHEMA,
-                                "feedback": {"length_limits": length_problems,
-                                    "problems": ["压缩超长正文，保留核心事实及必要条件，删除宣传数据、无关背景和重复说明。不要用删除整条代替缩写。"]}})
-                            doc = apply_repair(doc, patch, keys)
+                            patch = client.request("compress", {"articles": [
+                                {"event_key": a['event_key'],"title": a['title'],
+                                 "facts": [{"index": i,"text": f['text']} for i,f in enumerate(a['facts'])],
+                                 "max_characters": next(p['max_characters'] for p in length_problems if p['event_key']==a['event_key'])}
+                                for s in doc['sections'] for a in s['articles'] if a['event_key'] in keys]})
+                            doc = compact_articles(doc, patch, keys)
+                            metrics.setdefault('length_checks', []).append({'before': length_problems,'after': style_issues(doc)})
                         oversized = {p["event_key"] for p in style_issues(doc)}
                         doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
                                                       {c["event_key"] for c in candidates},

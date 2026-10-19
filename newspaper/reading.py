@@ -45,6 +45,11 @@ def report_view(doc: dict, key: str) -> dict:
                         'url': source['url'], 'label': source_label(source['url']), 'title': source['title'],
                     })
             paragraphs = list(dict.fromkeys(f['text'].strip() for f in article['facts'] if f['text'].strip()))
+            # Evidence claims need not be reader-facing paragraph boundaries.
+            limit=6 if section['id']=='science' else 4 if article.get('importance')=='重大' else 3
+            if len(paragraphs)>limit:
+                size=(len(paragraphs)+limit-1)//limit
+                paragraphs=[' '.join(paragraphs[i:i+size]) for i in range(0,len(paragraphs),size)]
             articles.append({**article, 'anchor': f'{prefix}-s{si}-a{ai}',
                 'paragraphs': paragraphs or [article['summary']], 'references': list(references.values()),
                 'time': display_time(article['published_at'])})

@@ -65,7 +65,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
         evidence = json.loads((settings.data / "editions" / key / "evidence.json").read_text())
         window = {k: doc[k] for k in ["date", "window_start", "window_end"]}
         validate_report(doc, settings, evidence["sources"], store.history(), window)
-        build(settings, store)
+        build(store.settings, store)
         store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
         store.db.execute("INSERT INTO runs(day,started_at,finished_at,status,metrics) VALUES(?,?,?,'published',?)",
                          (key, now.timestamp(), utcnow().timestamp(), json.dumps({"resumed_from_ready": True})))
@@ -235,7 +235,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
             store.db.execute("DELETE FROM editions WHERE day=? AND status!='published'", (key,))
             store.db.commit()
             store.add(doc)
-            build(settings, store)
+            build(store.settings, store)
             store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
             if notify:
                 enqueue(settings, store, key)

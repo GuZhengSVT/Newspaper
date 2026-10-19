@@ -60,6 +60,57 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(len(self.store.related_history([{'entities':['Fixture-Product']} ])),1)
         self.assertEqual(self.store.related_history([{'entities':['Unrelated']}]),[])
 
+    def two_edition_settings(self):
+        values={**self.settings.values,
+                'sections':self.settings.sections+[{'id':'acgn-fixture','name':'ACGN测试板块'}],
+                'editions':[{'id':'technology-politics','name':'科技与政治','sections':['fixture']},
+                            {'id':'acgn','name':'ACGN','sections':['acgn-fixture']}],
+                'search':{'mode':'bounded'}}
+        settings=Settings(values,self.settings.data,self.settings.web,self.settings.base_url)
+        self.store.settings=settings
+        return settings
+
+    def two_edition_documents(self):
+        tech=self.issue('technology-politics');acgn=self.issue('acgn')
+        section=acgn['sections'][0];section.update(id='acgn-fixture',name='ACGN测试板块')
+        section['articles'][0]['event_key']='acgn|synthetic|event'
+        return [tech,acgn]
+
+    def test_two_disjoint_editions_build_with_whole_site_configuration(self):
+        settings=self.two_edition_settings();documents=self.two_edition_documents()
+        responses=[];collections=[]
+        for doc in documents:
+            a=doc['sections'][0]['articles'][0]
+            responses.extend([doc,{'ok':True,'summary_ok':True,'article_reviews':[
+                {'event_key':a['event_key'],'ok':True,'problems':[]}]}])
+            candidate={'event_key':a['event_key'],'entities':a['entities'],'section_id':doc['sections'][0]['id'],
+                       'importance':'重要','source_ids':['s1']}
+            collections.append(([self.source],[candidate],[],[],{}))
+        with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
+             patch('newspaper.pipeline.bounded_research',side_effect=collections), \
+             patch('newspaper.pipeline.Model.request',side_effect=responses):
+            result=generate(settings,self.store,notify=False)
+        self.assertEqual(result['state'],'published')
+        for slug in ['technology-politics','acgn']:
+            self.assertTrue(self.store.published(self.day+'/'+slug))
+            self.assertTrue((settings.web/'current/archive'/slug/'index.html').is_file())
+            self.assertIn('/daily/'+self.day+'/'+slug+'/',(settings.web/f'current/feed-{slug}.xml').read_text())
+
+    def test_two_ready_editions_resume_without_research_or_configuration_error(self):
+        settings=self.two_edition_settings()
+        for doc in self.two_edition_documents():
+            self.save(doc);key=edition_key(doc)
+            (settings.data/'editions'/key/'evidence.json').write_text(json.dumps({'sources':[self.source]}))
+            self.store.db.execute("UPDATE editions SET status='ready' WHERE day=?",(key,))
+        self.store.db.commit()
+        with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
+             patch('newspaper.pipeline.Model') as model:
+            result=generate(settings,self.store,notify=False)
+        self.assertEqual(result['state'],'published');model.assert_not_called()
+        self.assertTrue(all(e['resumed'] for e in result['editions']))
+        for slug in ['technology-politics','acgn']:
+            self.assertTrue(self.store.published(self.day+'/'+slug))
+
     def test_a_reliability_does_not_accept_unconfirmed_single_report(self):
         doc=self.issue('acgn');doc['sections'][0]['articles'][0]['verification']='single_source'
         with self.assertRaises(ValueError):

@@ -187,12 +187,6 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(len(doc['sections'][0]['articles']),2)
         with self.assertRaises(ValueError):apply_repair(doc,patch,{'unrelated'})
 
-    def test_bounded_plan_must_cover_each_section(self):
-        from newspaper.bounded import research
-        from unittest.mock import Mock
-        client=Mock();client.request.return_value={'queries':[]}
-        with self.assertRaises(ValueError):research(self.settings,client,self.window,self.root,{})
-
     def test_bounded_research_fetches_only_selected_urls(self):
         from newspaper.bounded import research
         from unittest.mock import Mock

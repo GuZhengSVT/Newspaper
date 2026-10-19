@@ -10,15 +10,16 @@ Newspaper runs independently on a Linux VPS. A computer, browser tab or Codex se
 
 ```text
 12:00 Asia/Shanghai
-  → per-section DSH research (multi_search / advanced_search + web_fetch)
-  → fetch selected sources again through the DSH plugin
+  → AI query plan for each section
+  → bounded searches through DSH plugin engines
+  → shortlist, then fetch selected originals through the same DSH plugin
   → structured editing, historical deduplication and evidence quotation checks
   → independent model review; at most one repair / supplementary research round
   → report.json → Markdown + static HTML + RSS
   → atomic website release → email / Telegram outbox
 ```
 
-Empty editorial configuration deliberately pauses generation. There are no built-in news categories. The website and retention service continue working while categories are being chosen.
+Empty editorial configuration deliberately pauses generation. An optional reusable two-edition editorial example is provided; it is not enabled by installation. The website and retention service continue working while categories are being chosen.
 
 ## Requirements
 
@@ -104,7 +105,7 @@ An edition expires at 00:00 Asia/Shanghai on its date + 30 days: the current dat
 
 Cleanup deletes:
 
-- Raw source data, structured reports and Markdown, including orphaned dated directories.
+- Selected evidence excerpts, structured reports and Markdown, including orphaned dated directories.
 - Published HTML, downloadable files, RSS items, search entries and superseded website releases.
 - Event / notification rows through cascading database deletion; SQLite uses `secure_delete` and `VACUUM`, without WAL archives.
 - Temporary DSH profiles, sessions, search caches and diagnostic output. Each task has an isolated DSH home and cache directory, deleted after the task; crash leftovers are removed by cleanup.
@@ -135,3 +136,17 @@ Import an existing archive with `newspaper import-legacy /path/to/News`. Only un
 Keep installation paths configurable, place machine-specific settings outside the repository, and update lockfiles plus profile checks when upgrading DSH. Python 3.13 and Node 22 are the current CI targets.
 
 MIT licensed. DeepSeek Harness and dsh-free-search retain their respective licenses; they are installed dependencies, not vendored source.
+
+## Separate editions and bounded evidence (schema v2)
+
+`editorial.example.toml` defines two independent editions, Technology & Politics and ACGN, with 15 sections. Append it to the local TOML configuration, or define your own `[[editions]]` (`id`, `name`, `sections`) and `[[sections]]` (`id`, `name`, `scope`, `batch`). Each enabled section belongs to exactly one edition. The default install remains unconfigured.
+
+The shared editorial policy is `prompts/editorial.md`. Importance is major/important only; reliability is A/B, with unsubstantiated C rumors excluded. Empty sections are hidden in Markdown and HTML. The default `search.mode="bounded"` lets the AI plan two queries per section and executes the pinned plugin's keyless Bing/DDG/Exa engines directly. No growing agent transcript or extra search-model calls are involved. A shortlist uses search previews only for discovery; at most 24 selected originals per edition are fetched for actual evidence. Canonical URL fetches are cached within the run and identical bodies deduplicated. Drafting reads selected contexts; review reads cited passages with adjacent context. Content repairs replace only affected articles; schema failures may retry the draft once. `mode="headless"` remains an optional DSH CLI path with related sections sharing a research batch. The SQLite entity index retrieves only relevant, compact event history. Exact historical event keys are also checked locally across editions. Entity aliases and semantic novelty still depend on model judgment.
+
+For corroborated articles, every core fact requires citations from distinct source hosts; the review must additionally reject syndicated copies and unsupported interpretations. An official claim is not an independently verified result. This is automated evidence checking, not a guarantee of truth or human review.
+
+Published evidence files contain only source metadata, cited quotations and short adjacent contexts. Unselected pages, intermediate drafts and DSH sessions are removed when the run exits; the regular cleaner removes crash remnants. All editions, evidence, event/entity indexes and metrics expire within the same 30-day policy. No permanent historical fingerprint store is kept.
+
+Daily routes are `/daily/YYYY-MM-DD/technology-politics/` and `/daily/YYYY-MM-DD/acgn/`; downloads use `/downloads/YYYY-MM-DD/<edition>.md` or `.json`. Existing single-edition archives remain accessible. Subscribe to the combined `/feed.xml`, or `/feed-technology-politics.xml` and `/feed-acgn.xml` independently.
+
+Run `newspaper run --no-notify` for a published web preview without enqueueing or sending email/Telegram notifications. A published date/edition is immutable and skipped on reruns; preview notifications are not later enqueued automatically. Failure of one edition does not block another and returns an overall nonzero status. Run metrics retain direct model API usage and duration/input-character counts without request bodies. Bounded mode has no additional DSH model calls; all planning/editing API calls are measured. Optional headless-mode DSH aggregate token usage is explicitly unknown (`null`) when unavailable, so its direct API totals do not represent the full bill.

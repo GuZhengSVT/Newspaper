@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import copy
+import json
+import unittest
+from datetime import datetime, timedelta
+from unittest.mock import patch
+
+import test_newspaper as fixtures
+from newspaper.config import Settings
+from newspaper.evidence import selected_sources, used_evidence, validate_selection
+from newspaper.pipeline import generate, apply_repair
+from newspaper.publish import build, markdown
+from newspaper.research import source_url, gather
+from newspaper.retention import clean
+from newspaper.storage import edition_key, expiry
+from newspaper.validation import validate_report
+
+
+class EditionTests(unittest.TestCase):
+    setUp = fixtures.NewspaperTests.setUp
+    tearDown = fixtures.NewspaperTests.tearDown
+
+    def issue(self, slug):
+        doc = copy.deepcopy(self.doc)
+        doc.update(schema_version=2, edition=slug, title=slug)
+        a = doc['sections'][0]['articles'][0]
+        a.update(importance='重要', reliability='A', entities=['Fixture Product'], verification='official_statement')
+        return doc
+
+    def save(self, doc):
+        key = edition_key(doc)
+        directory = self.settings.data / 'editions' / key
+        directory.mkdir(parents=True)
+        (directory / 'report.json').write_text(json.dumps(doc))
+        (directory / 'report.md').write_text(markdown(doc))
+        self.store.add(doc)
+        self.store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
+        self.store.db.commit()
+
+    def test_same_date_two_issues_build_and_expire(self):
+        for slug in ['technology-politics','acgn']:
+            self.save(self.issue(slug))
+        settings = Settings({**self.settings.values, 'editions':[
+            {'id':'technology-politics','name':'科技与政治','sections':['fixture']},
+            {'id':'acgn','name':'ACGN','sections':[]}]},self.settings.data,self.settings.web,self.settings.base_url)
+        build(settings,self.store)
+        for slug in ['technology-politics','acgn']:
+            page = (self.settings.web/'current/daily'/self.day/slug/'index.html').read_text()
+            self.assertIn(f'/downloads/{self.day}/{slug}.md',page)
+            self.assertTrue((self.settings.web/'current/downloads'/self.day/f'{slug}.md').is_file())
+            self.assertIn(slug,(self.settings.web/f'current/feed-{slug}.xml').read_text())
+        clean(settings,self.store,expiry(self.day))
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM event_entities').fetchone()[0],0)
+        self.assertFalse((self.settings.data/'editions'/self.day).exists())
+
+    def test_related_history_uses_normalized_entities(self):
+        self.save(self.issue('acgn'))
+        self.assertEqual(len(self.store.related_history([{'entities':['Fixture-Product']} ])),1)
+        self.assertEqual(self.store.related_history([{'entities':['Unrelated']}]),[])
+
+    def test_a_reliability_does_not_accept_unconfirmed_single_report(self):
+        doc=self.issue('acgn');doc['sections'][0]['articles'][0]['verification']='single_source'
+        with self.assertRaises(ValueError):
+            validate_report(doc,self.settings,[self.source],[],self.window)
+
+    def test_core_claim_requires_its_own_corroboration(self):
+        doc=self.issue('acgn');doc['sections'][0]['articles'][0]['verification']='corroborated'
+        extra={**self.source,'id':'s2','url':'https://another.test/source'}
+        doc['sources'].append({k:extra[k] for k in ['id','url','title','published_at']})
+        with self.assertRaises(ValueError):
+            validate_report(doc,self.settings,[self.source,extra],[],self.window)
+
+    def test_empty_sections_hidden_from_web_and_markdown(self):
+        doc=self.issue('acgn');doc['sections'][0]['articles']=[];doc['sections'][0]['empty_reason']='No qualifying events'
+        self.save(doc);build(self.settings,self.store)
+        self.assertNotIn('## 测试板块',markdown(doc))
+        page=(self.settings.web/'current/daily'/self.day/'acgn/index.html').read_text()
+        self.assertNotIn('测试板块',page)
+
+    def test_preview_never_queues_or_sends_messages(self):
+        collection={'section_id':'fixture','sources':[self.source],'notes':[]}
+        moment=datetime.fromisoformat(self.day+'T12:05:00+08:00')
+        with patch('newspaper.pipeline.utcnow',return_value=moment),patch('newspaper.pipeline.gather',return_value=collection), \
+             patch('newspaper.pipeline.Model.request',side_effect=[copy.deepcopy(self.doc),{'ok':True}]), \
+             patch('newspaper.pipeline.deliver') as sender:
+            generate(self.settings,self.store,notify=False)
+        sender.assert_not_called()
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM deliveries').fetchone()[0],0)
+        directory=self.settings.data/'editions'/self.day
+        self.assertTrue((directory/'evidence.json').is_file())
+        self.assertFalse((directory/'raw.json').exists())
+
+    def test_selection_cannot_invent_source_or_exceed_budget(self):
+        candidate={'event_key':'e','entities':['thing'],'section_id':'fixture','importance':'重要','source_ids':['invented']}
+        with self.assertRaises(ValueError):validate_selection({'candidates':[candidate]},self.settings,[self.source],2)
+        candidate['source_ids']=['s1']
+        with self.assertRaises(ValueError):validate_selection({'candidates':[candidate]},self.settings,[self.source],0)
+
+    def test_evidence_bundle_keeps_quotes_drops_unrelated_pages(self):
+        extra={**self.source,'id':'unused','content':'Unrelated article'}
+        bundle=used_evidence(self.doc,[self.source,extra])
+        self.assertEqual([s['id'] for s in bundle],['s1'])
+        self.assertIn('This is synthetic evidence',bundle[0]['content'])
+
+    def test_canonical_url_and_in_run_fetch_cache(self):
+        self.assertEqual(source_url('https://EXAMPLE.test/source?utm_source=x#fragment'),'https://example.test/source')
+        cache={};raw={'sources':[{'url':'https://example.test/source'}]}
+        with patch('newspaper.research.collect',return_value=raw),patch('newspaper.research.fetch_source',return_value=self.source) as fetch:
+            for i in range(2):gather(self.settings,{'id':'fixture'},self.window,self.root,cache=cache)
+        self.assertEqual(fetch.call_count,1)
+
+    def test_document_path_traversal_rejected(self):
+        with self.assertRaises(ValueError):self.store.document(self.day+'/../../credentials')
+
+    def test_edition_failure_does_not_block_other_edition(self):
+        editions=[{'id':'technology-politics','name':'科技','sections':['fixture']},{'id':'acgn','name':'ACGN','sections':[]}]
+        settings=Settings({**self.settings.values,'editions':editions},self.settings.data,self.settings.web,self.settings.base_url)
+        with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
+             patch('newspaper.pipeline.generate_edition',side_effect=[ValueError('failure'),{'state':'published'}]) as run:
+            result=generate(settings,self.store,notify=False)
+        self.assertEqual(run.call_count,2)
+        self.assertEqual(result['state'],'partial_failure')
+
+    def test_targeted_repair_does_not_change_unaffected_article(self):
+        doc=self.issue('acgn')
+        original=copy.deepcopy(doc['sections'][0]['articles'][0])
+        second={**copy.deepcopy(original),'event_key':'other|new|event','title':'Unchanged'}
+        doc['sections'][0]['articles'].append(second)
+        patch={'replacements':[{'section_id':'fixture','event_key':original['event_key'],'article':None}],
+               'summary':'Updated summary','highlights':[]}
+        result=apply_repair(doc,patch,{original['event_key']})
+        self.assertEqual(result['sections'][0]['articles'],[second])
+        self.assertEqual(len(doc['sections'][0]['articles']),2)
+        with self.assertRaises(ValueError):apply_repair(doc,patch,{'unrelated'})
+
+    def test_bounded_plan_must_cover_each_section(self):
+        from newspaper.bounded import research
+        from unittest.mock import Mock
+        client=Mock();client.request.return_value={'queries':[]}
+        with self.assertRaises(ValueError):research(self.settings,client,self.window,self.root,{})
+
+    def test_bounded_research_fetches_only_selected_urls(self):
+        from newspaper.bounded import research
+        from unittest.mock import Mock
+        import hashlib
+        sid='s-'+hashlib.sha256(self.source['url'].encode()).hexdigest()[:16]
+        source={**self.source,'id':sid}
+        client=Mock();client.request.side_effect=[{'queries':[{'section_id':'fixture','query':'current announcement'}]},
+          {'candidates':[{'event_key':'fixture|release|one','entities':['fixture'],'section_id':'fixture','importance':'重要','source_ids':[sid]}]}]
+        result=[{'section_id':'fixture','engines_ok':1,'sources':[
+          {'url':self.source['url'],'title':'selected','snippet':'preview','published_at':None},
+          {'url':'https://unused.test/source','title':'unused','snippet':'irrelevant','published_at':None}]}]
+        with patch('newspaper.bounded.search',return_value=result),patch('newspaper.bounded.fetch',return_value=[source]) as fetch:
+          sources,candidates,_,_,metrics=research(self.settings,client,self.window,self.root,{})
+        self.assertEqual(len(fetch.call_args.args[1]),1)
+        self.assertEqual(sources,[source]);self.assertEqual(metrics['plugin_queries'],1)
+
+    def test_transient_gateway_overload_has_bounded_retry(self):
+        from newspaper.model import Model
+        import httpx,os
+        request=httpx.Request('POST','https://example.test/chat/completions')
+        bad=httpx.Response(503,json={'error':{'code':'system_memory_overloaded'}},request=request)
+        good=httpx.Response(200,json={'choices':[{'finish_reason':'stop','message':{'content':'{"queries":[]}'}}],
+                                    'usage':{'prompt_tokens':10,'completion_tokens':5}},request=request)
+        with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
+            client.return_value.__enter__.return_value.post.side_effect=[bad,good]
+            model=Model(self.settings);self.assertEqual(model.request('plan',{}),{'queries':[]})
+        sleep.assert_called_once_with(5)
+        self.assertEqual(model.usage[0]['http_attempts'],2)
+        self.assertNotIn('synthetic-test-secret',str(model.usage))
+
+
+if __name__=='__main__':unittest.main()

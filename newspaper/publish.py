@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -23,23 +24,29 @@ LABELS = {"official_statement": "官方发布", "single_source": "单一来源",
 def markdown(doc: dict) -> str:
     text = ["---", f'title: {json.dumps(doc["title"], ensure_ascii=False)}', f'date: "{doc["date"]}"',
             f'generated_at: "{doc["generated_at"]}"', 'model: "d1api/deepseek-v4.1-flash"',
-            "schema_version: 1", "---", "", "# " + doc["title"], "", doc["summary"], "",
+            f'schema_version: {doc["schema_version"]}', "---", "", "# " + doc["title"], "", doc["summary"], "",
             f'报道窗口：{doc["window_start"]} 至 {doc["window_end"]}', "", "## 今日重点", ""]
     text.extend("- " + item for item in doc["highlights"])
     sources = {s["id"]: s for s in doc["sources"]}
     for section in doc["sections"]:
-        text += ["", "## " + section["name"], ""]
         if not section["articles"]:
-            text.append(section["empty_reason"])
+            continue
+        text += ["", "## " + section["name"], ""]
         for article in section["articles"]:
             text += ["### " + article["title"] + ("【跟进】" if article["follow_up"] else ""), "", article["summary"], "",
                      "报道时间：" + article["published_at"], "核实状态：" + LABELS[article["verification"]], ""]
+            if article.get("importance"):
+                text += [f'重要性：{article["importance"]} · 可靠性：{article["reliability"]}', ""]
             if article["new_facts"]:
                 text += ["新增进展：" + article["new_facts"], ""]
             for fact in article["facts"]:
                 cited = dict.fromkeys(e["source_id"] for e in fact["evidence"])
                 links = " ".join(f'[{sources[sid]["title"]}](<{sources[sid]["url"]}>)' for sid in cited)
-                text.append("- " + fact["text"] + " 来源：" + links)
+                text += [fact["text"], "", "来源：" + links, ""]
+            if article.get("limitations"):
+                text += ["不确定性与限制：" + article["limitations"], ""]
+    if doc.get("coverage_notes"):
+        text += ["", "## 覆盖说明", ""] + ["- " + n for n in doc["coverage_notes"]]
     text += ["", "## 来源清单", ""]
     text.extend(f'- [{s["title"]}](<{s["url"]}>)' for s in doc["sources"])
     return "\n".join(text) + "\n"
@@ -67,17 +74,18 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
                 legacy_body = legacy_body.split("\n---", 1)[1].lstrip()
             legacy_html = Markup(MARKDOWN.render(legacy_body)) if entry["legacy"] else None
             (directory / "index.html").write_text(env.get_template("daily.html").render(
-                doc=doc, legacy_html=legacy_html, entries=entries, sources={s["id"]: s for s in doc.get("sources", [])},
+                doc=doc, document_key=day, legacy_html=legacy_html, entries=entries, sources={s["id"]: s for s in doc.get("sources", [])},
             ))
             downloads = release / "downloads"
             downloads.mkdir(exist_ok=True)
+            (downloads / f"{day}.md").parent.mkdir(parents=True, exist_ok=True)
             (downloads / f"{day}.md").write_text(md)
             # Only published report data is exposed, never raw evidence or credentials.
             (downloads / f"{day}.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2))
             search_index.append({"date": day, "title": entry["title"], "summary": entry["summary"],
                                  "text": " ".join([entry["summary"]] + [a["title"] + " " + a["summary"] for s in doc.get("sections", []) for a in s["articles"]])})
         (release / "index.html").write_text(env.get_template("index.html").render(
-            entries=entries, sections=settings.sections, built_at=datetime.fromtimestamp(now).astimezone().isoformat(),
+            entries=entries, sections=settings.sections, editions=settings.values.get("editions", []), built_at=datetime.fromtimestamp(now).astimezone().isoformat(),
         ))
         (release / "search.json").write_text(json.dumps(search_index, ensure_ascii=False))
         rss = Element("rss", version="2.0")
@@ -92,6 +100,14 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
             doc = store.document(entry["day"])
             SubElement(item, "pubDate").text = format_datetime(datetime.fromisoformat(doc["generated_at"]))
         (release / "feed.xml").write_bytes(tostring(rss, encoding="utf-8", xml_declaration=True))
+        for edition in settings.values.get("editions", []):
+            feed = copy.deepcopy(rss)
+            ch = feed.find("channel")
+            ch.find("title").text = edition["name"]
+            for item in list(ch.findall("item")):
+                if not item.findtext("link", "").rstrip("/").endswith("/" + edition["id"]):
+                    ch.remove(item)
+            (release / ("feed-" + edition["id"] + ".xml")).write_bytes(tostring(feed, encoding="utf-8", xml_declaration=True))
         (release / "robots.txt").write_text("User-agent: *\nDisallow: /downloads/\n")
         link = settings.web / (".current-" + uuid.uuid4().hex)
         link.symlink_to(release.relative_to(settings.web), target_is_directory=True)

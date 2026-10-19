@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 from datetime import datetime
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -49,8 +50,16 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
             if article["follow_up"] and not article["new_facts"].strip():
                 raise ValueError("Follow-up needs explicit new facts")
             seen.add(identity)
+            if doc.get("schema_version") == 2 and article["reliability"] == "A" and article["verification"] == "single_source":
+                raise ValueError("A reliability requires primary authority or independent corroboration")
             referenced = set()
             for fact in article["facts"]:
+                if (doc.get("schema_version") == 2 and article["verification"] == "corroborated"
+                    and fact.get("kind", "fact") == "fact"):
+                    domains = {urlsplit(source_map[e["source_id"]]["url"]).hostname
+                               for e in fact["evidence"] if e["source_id"] in source_map}
+                    if len(domains) < 2:
+                        raise ValueError("Each corroborated core fact needs distinct source origins; independence also needs review")
                 for evidence in fact["evidence"]:
                     sid = evidence["source_id"]
                     if sid not in ids or sid not in source_map:

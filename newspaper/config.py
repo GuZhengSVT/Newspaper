@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +57,25 @@ class Settings:
         if len(ids) != len(set(ids)):
             raise ValueError("Duplicate section id")
         return sections
+
+    @property
+    def editions(self) -> list[dict]:
+        configured = self.values.get("editions", [])
+        if not configured:
+            return [{"id": "daily" if self.values.get("search", {}).get("mode") == "bounded" else "", "name": "日报", "sections": [s["id"] for s in self.sections]}]
+        ids = [e["id"] for e in configured]
+        if len(ids) != len(set(ids)) or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", i) for i in ids):
+            raise ValueError("Invalid or duplicate edition id")
+        section_ids = {s["id"] for s in self.sections}
+        assigned = [i for e in configured for i in e["sections"]]
+        if len(set(assigned)) != len(assigned) or set(assigned) != section_ids:
+            raise ValueError("Each enabled section must belong to exactly one edition")
+        return configured
+
+    def for_edition(self, edition: dict) -> "Settings":
+        ids = set(edition["sections"])
+        return Settings({**self.values, "sections": [s for s in self.sections if s["id"] in ids]},
+                        self.data, self.web, self.base_url)
 
     def prepare(self) -> None:
         for path in [self.data, self.data / "editions", self.data / "tmp", self.web, self.web / "releases"]:

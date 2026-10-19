@@ -3,57 +3,296 @@
   "title": "Newspaper report v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "date", "title", "summary", "highlights", "window_start", "window_end", "generated_at", "sections", "sources"],
+  "required": [
+    "schema_version",
+    "date",
+    "title",
+    "summary",
+    "highlights",
+    "window_start",
+    "window_end",
+    "generated_at",
+    "sections",
+    "sources"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "date": {"type": "string", "format": "date"},
-    "title": {"type": "string", "minLength": 1, "maxLength": 160},
-    "summary": {"type": "string", "maxLength": 800},
-    "highlights": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 300}},
-    "window_start": {"type": "string", "format": "date-time"},
-    "window_end": {"type": "string", "format": "date-time"},
-    "generated_at": {"type": "string", "format": "date-time"},
-    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
-    "sections": {"type": "array", "items": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "name", "empty_reason", "articles"],
-      "properties": {
-        "id": {"type": "string"}, "name": {"type": "string"},
-        "empty_reason": {"type": "string"},
-        "articles": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/article"}}
+    "schema_version": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 800
+    },
+    "highlights": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 300
       }
-    }}
+    },
+    "window_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "window_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "empty_reason",
+          "articles"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "empty_reason": {
+            "type": "string"
+          },
+          "articles": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/$defs/article"
+            }
+          }
+        }
+      }
+    },
+    "edition": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,40}$"
+    },
+    "coverage_notes": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "string",
+        "maxLength": 600
+      }
+    }
   },
   "$defs": {
     "source": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "url", "title", "published_at"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "url",
+        "title",
+        "published_at"
+      ],
       "properties": {
-        "id": {"type": "string"}, "url": {"type": "string", "pattern": "^https://"},
-        "title": {"type": "string"}, "published_at": {"type": ["string", "null"]}
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "title": {
+          "type": "string"
+        },
+        "published_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "article": {
-      "type": "object", "additionalProperties": false,
-      "required": ["event_key", "title", "summary", "published_at", "follow_up", "new_facts", "verification", "facts"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_key",
+        "title",
+        "summary",
+        "published_at",
+        "follow_up",
+        "new_facts",
+        "verification",
+        "facts"
+      ],
       "properties": {
-        "event_key": {"type": "string", "minLength": 3, "maxLength": 200},
-        "title": {"type": "string", "minLength": 1, "maxLength": 200},
-        "summary": {"type": "string", "maxLength": 500},
-        "published_at": {"type": "string", "format": "date-time"},
-        "follow_up": {"type": "boolean"}, "new_facts": {"type": "string", "maxLength": 1000},
-        "verification": {"enum": ["official_statement", "single_source", "corroborated"]},
-        "facts": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
-          "type": "object", "additionalProperties": false, "required": ["text", "evidence"],
-          "properties": {
-            "text": {"type": "string", "minLength": 1, "maxLength": 1000},
-            "evidence": {"type": "array", "minItems": 1, "maxItems": 5, "items": {
-              "type": "object", "additionalProperties": false, "required": ["source_id", "quote"],
-              "properties": {"source_id": {"type": "string"}, "quote": {"type": "string", "minLength": 8, "maxLength": 600}}
-            }}
+        "event_key": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "follow_up": {
+          "type": "boolean"
+        },
+        "new_facts": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "verification": {
+          "enum": [
+            "official_statement",
+            "single_source",
+            "corroborated"
+          ]
+        },
+        "facts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "text",
+              "evidence"
+            ],
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3500
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 5,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source_id",
+                    "quote"
+                  ],
+                  "properties": {
+                    "source_id": {
+                      "type": "string"
+                    },
+                    "quote": {
+                      "type": "string",
+                      "minLength": 8,
+                      "maxLength": 900
+                    }
+                  }
+                }
+              },
+              "kind": {
+                "enum": [
+                  "fact",
+                  "background",
+                  "explanation",
+                  "significance",
+                  "community",
+                  "limitation"
+                ]
+              }
+            }
           }
-        }}
+        },
+        "importance": {
+          "enum": [
+            "重大",
+            "重要"
+          ]
+        },
+        "reliability": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "entities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "limitations": {
+          "type": "string",
+          "maxLength": 1800
+        }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "edition"
+        ],
+        "properties": {
+          "sections": {
+            "items": {
+              "properties": {
+                "articles": {
+                  "items": {
+                    "required": [
+                      "importance",
+                      "reliability",
+                      "entities"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

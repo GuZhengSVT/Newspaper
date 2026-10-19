@@ -13,6 +13,11 @@ timeout_seconds = 180
 max_tokens = 12000
 
 [search]
+# bounded: AI plans, pinned DSH plugin executes, no growing headless transcript.
+# headless: optional original DSH agent mode.
+mode = "bounded"
+max_candidates_per_edition = 12
+max_fetches_per_edition = 24
 engines = ["ddg", "bing", "exa"]
 queries_per_section = 3
 max_sources_per_section = 8

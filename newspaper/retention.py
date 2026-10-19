@@ -20,7 +20,7 @@ def clean(settings: Settings, store: Store, now: float | None = None) -> dict:
         build_error = exc
         published = {"editions": len(store.editions(now)), "release": None}
         current = settings.web / "current"
-        for path in [current / "index.html", current / "feed.xml", current / "search.json"]:
+        for path in [current / "index.html", current / "feed.xml", current / "search.json", *current.glob("feed-*.xml")]:
             path.unlink(missing_ok=True)
         for directory in (settings.web / "releases").iterdir():
             dated = set(expired)

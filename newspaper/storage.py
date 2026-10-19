@@ -4,6 +4,8 @@ import contextlib
 import fcntl
 import json
 import os
+import re
+import unicodedata
 import sqlite3
 import tempfile
 import time as clock
@@ -17,9 +19,21 @@ def utcnow() -> datetime:
     return datetime.now(TZ)
 
 
+def edition_key(doc: dict) -> str:
+    day = date.fromisoformat(doc["date"]).isoformat()
+    slug = doc.get("edition", "")
+    if slug and not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", slug):
+        raise ValueError("Unsafe edition id")
+    return day + ("/" + slug if slug else "")
+
+
+def normalize_entity(text: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKC", text).casefold() if c.isalnum())
+
+
 def expiry(day: str) -> float:
     # Rebuilds never extend retention. Keep the edition date and the next 29 dates.
-    return datetime.combine(date.fromisoformat(day) + timedelta(days=30), time(), TZ).timestamp()
+    return datetime.combine(date.fromisoformat(day.split("/")[0]) + timedelta(days=30), time(), TZ).timestamp()
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -78,7 +92,21 @@ class Store:
             id INTEGER PRIMARY KEY, day TEXT NOT NULL, started_at REAL NOT NULL,
             finished_at REAL, status TEXT NOT NULL, error TEXT
           );
+          CREATE TABLE IF NOT EXISTS event_entities (
+            entity TEXT NOT NULL, event_id TEXT NOT NULL,
+            day TEXT NOT NULL REFERENCES editions(day) ON DELETE CASCADE,
+            PRIMARY KEY(entity,event_id,day)
+          );
+          CREATE INDEX IF NOT EXISTS entity_lookup ON event_entities(entity);
         """)
+        columns = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
+        if "facts" not in columns:
+            self.db.execute("ALTER TABLE events ADD COLUMN facts TEXT NOT NULL DEFAULT '[]'")
+        if "entities" not in columns:
+            self.db.execute("ALTER TABLE events ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
+        if "metrics" not in {r[1] for r in self.db.execute("PRAGMA table_info(runs)")}:
+            self.db.execute("ALTER TABLE runs ADD COLUMN metrics TEXT NOT NULL DEFAULT '{}'")
+        self.db.commit()
 
     def close(self) -> None:
         self.db.close()
@@ -90,13 +118,23 @@ class Store:
         )]
 
     def add(self, doc: dict, legacy: bool = False) -> None:
+        key = edition_key(doc)
         self.db.execute(
             "INSERT INTO editions(day,expires_at,status,title,summary,legacy) VALUES(?,?,'ready',?,?,?)",
-            (doc["date"], expiry(doc["date"]), doc["title"], doc["summary"], int(legacy)),
+            (key, expiry(doc["date"]), doc["title"], doc["summary"], int(legacy)),
         )
         for section in doc.get("sections", []):
             for article in section["articles"]:
-                self.db.execute("INSERT INTO events VALUES(?,?,?)", (article["event_key"], doc["date"], article["title"]))
+                entities = article.get("entities", [])
+                self.db.execute("INSERT INTO events(id,day,description,facts,entities) VALUES(?,?,?,?,?)",
+                                (article["event_key"], key, article["title"],
+                                 json.dumps(([article["new_facts"]] if article["new_facts"] else []) + [f["text"][:500] for f in article["facts"] if f.get("kind", "fact") == "fact"][:4], ensure_ascii=False),
+                                 json.dumps(entities, ensure_ascii=False)))
+                for entity in entities:
+                    normalized = normalize_entity(entity)
+                    if normalized:
+                        self.db.execute("INSERT OR IGNORE INTO event_entities VALUES(?,?,?)",
+                                        (normalized, article["event_key"], key))
         self.db.commit()
 
     def history(self) -> list[dict]:
@@ -105,8 +143,38 @@ class Store:
             (utcnow().timestamp(),),
         )]
 
+    def related_history(self, candidates: list[dict], limit: int = 40) -> list[dict]:
+        entities = {normalize_entity(e) for c in candidates for e in c.get("entities", [])}
+        entities.discard("")
+        keys = {c["event_key"] for c in candidates if c.get("event_key")}
+        if not entities and not keys:
+            return []
+        marks = ",".join("?" for _ in entities) or "NULL"
+        keymarks = ",".join("?" for _ in keys) or "NULL"
+        rows = self.db.execute(f"""SELECT DISTINCT e.* FROM events e
+            JOIN editions d ON d.day=e.day LEFT JOIN event_entities x ON x.event_id=e.id AND x.day=e.day
+            WHERE d.status='published' AND d.expires_at>? AND (x.entity IN ({marks}) OR e.id IN ({keymarks}))
+            ORDER BY e.day DESC LIMIT ?""", (utcnow().timestamp(), *entities, *keys, limit)).fetchall()
+        result = [{**dict(r), "facts": json.loads(r["facts"]), "entities": json.loads(r["entities"])} for r in rows]
+        # Imported v1 archives have no entity index. Match their short event titles locally.
+        known = {(r["id"], r["day"]) for r in result}
+        if len(result) < limit:
+            legacy = self.db.execute("""SELECT e.* FROM events e JOIN editions d ON d.day=e.day
+                WHERE d.status='published' AND d.expires_at>? AND e.entities='[]' ORDER BY e.day DESC""",
+                (utcnow().timestamp(),)).fetchall()
+            for row in legacy:
+                if len(result) >= limit:
+                    break
+                description = normalize_entity(row["description"])
+                if (row["id"], row["day"]) not in known and any(len(e)>=3 and e in description for e in entities):
+                    result.append({**dict(row), "facts": json.loads(row["facts"]), "entities": []})
+        return result
+
     def document(self, day: str) -> dict:
-        date.fromisoformat(day)
+        parts = day.split("/")
+        date.fromisoformat(parts[0])
+        if len(parts) > 2 or (len(parts) == 2 and not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", parts[1])):
+            raise ValueError("Unsafe document path")
         return json.loads((self.settings.data / "editions" / day / "report.json").read_text())
 
     def published(self, day: str) -> bool:

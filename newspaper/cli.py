@@ -20,7 +20,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Newspaper daily publishing pipeline")
     parser.add_argument("--config")
     commands = parser.add_subparsers(dest="command", required=True)
-    for cmd in ["run", "build", "clean", "notify", "status", "doctor"]:
+    run = commands.add_parser("run")
+    run.add_argument("--no-notify", action="store_true", help="Publish a preview without enqueueing email or Telegram")
+    for cmd in [ "build", "clean", "notify", "status", "doctor"]:
         commands.add_parser(cmd)
     legacy = commands.add_parser("import-legacy")
     legacy.add_argument("directory", type=Path)
@@ -41,7 +43,7 @@ def main() -> int:
             store = Store(settings)
             try:
                 if args.command == "run":
-                    result = generate(settings, store)
+                    result = generate(settings, store, notify=not args.no_notify)
                 elif args.command == "build":
                     result = build(settings, store)
                 elif args.command == "clean":
@@ -56,7 +58,7 @@ def main() -> int:
             finally:
                 store.close()
         print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return 1 if result.get("state") == "partial_failure" else 0
     except BlockingIOError:
         print('{"state":"busy"}')
         return 75

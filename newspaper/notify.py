@@ -28,10 +28,11 @@ def enqueue(settings: Settings, store: Store, day: str) -> None:
 
 def send(settings: Settings, channel: str, day: str) -> None:
     # Push links, not full articles or attachments: retention applies on this VPS.
-    text = f"{day} Newspaper 日报已发布。\n阅读：{settings.base_url}/daily/{day}/\nMarkdown：{settings.base_url}/downloads/{day}.md\n服务器仅保留最近 30 天。"
+    label = day.replace("/technology-politics", " 科技与政治").replace("/acgn", " ACGN")
+    text = f"{label} Newspaper 日报已发布。\n阅读：{settings.base_url}/daily/{day}/\nMarkdown：{settings.base_url}/downloads/{day}.md\n服务器仅保留最近 30 天。"
     if channel == "email":
         message = EmailMessage()
-        message["Subject"] = f"Newspaper · {day} 日报已更新"
+        message["Subject"] = f"Newspaper · {label} 日报已更新"
         message["From"] = os.environ["EMAIL_FROM"]
         message["To"] = os.environ["EMAIL_TO"]
         message["Date"] = formatdate(localtime=False)

@@ -23,8 +23,15 @@ from .storage import Store, atomic_json, utcnow
 from .validation import SCHEMA, validate_report, normalize
 
 
-def generate(settings: Settings, store: Store, notify: bool = True) -> dict:
+def generate(settings: Settings, store: Store, notify: bool = True, cutoff: datetime | None = None) -> dict:
     """Both editions share a bounded in-run source cache; publications are independent."""
+    if cutoff is not None:
+        now = utcnow()
+        if cutoff.tzinfo is None:
+            raise ValueError("Cutoff requires an explicit timezone")
+        cutoff = cutoff.astimezone(TZ)
+        if cutoff.date() != now.date() or cutoff > now or cutoff.hour < 12:
+            raise ValueError("Cutoff must be between today's noon and the current time")
     clean(settings, store)
     if not settings.sections:
         return {"state": "awaiting_sections", "date": utcnow().date().isoformat()}
@@ -35,7 +42,7 @@ def generate(settings: Settings, store: Store, notify: bool = True) -> dict:
     for edition in settings.editions:
         scoped = settings.for_edition(edition)
         try:
-            results.append(generate_edition(scoped, store, edition, cache, notify))
+            results.append(generate_edition(scoped, store, edition, cache, notify, cutoff=cutoff))
         except Exception as exc:
             results.append({"edition": edition["id"], "state": "failed", "error_type": type(exc).__name__})
             if not edition["id"]:  # Preserve the original single-edition CLI contract.
@@ -46,7 +53,8 @@ def generate(settings: Settings, store: Store, notify: bool = True) -> dict:
     return {"state": state, "date": utcnow().date().isoformat(), "editions": results}
 
 
-def generate_edition(settings: Settings, store: Store, edition: dict, cache: dict, notify: bool) -> dict:
+def generate_edition(settings: Settings, store: Store, edition: dict, cache: dict, notify: bool,
+                     cutoff: datetime | None = None) -> dict:
     now = utcnow()
     day = now.date().isoformat()
     key = day + ("/" + edition["id"] if edition["id"] else "")
@@ -69,7 +77,8 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 "url": settings.base_url + "/daily/" + key + "/",
                 **({"notifications": deliver(settings, store)} if notify else {})}
     end = datetime.combine(now.date(), time(12), TZ)
-    window = {"date": day, "window_start": (end - timedelta(days=1)).isoformat(), "window_end": end.isoformat()}
+    window = {"date": day, "window_start": (end - timedelta(days=1)).isoformat(),
+              "window_end": (cutoff or end).isoformat()}
     cursor = store.db.execute("INSERT INTO runs(day,started_at,status) VALUES(?,?,'running')", (key, now.timestamp()))
     run_id = cursor.lastrowid
     store.db.commit()

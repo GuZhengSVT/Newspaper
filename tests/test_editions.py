@@ -187,6 +187,35 @@ class EditionTests(unittest.TestCase):
         self.assertTrue((self.settings.web/'current/daily'/key/'index.html').is_file())
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM deliveries').fetchone()[0],0)
 
+    def test_manual_cutoff_includes_verified_afternoon_news(self):
+        cutoff=datetime.fromisoformat(self.day+'T21:03:11+08:00')
+        doc=self.issue('acgn');doc['window_end']=cutoff.isoformat()
+        source={**self.source,'published_at':self.day+'T20:00:00+08:00'}
+        article=doc['sections'][0]['articles'][0];article['published_at']=source['published_at']
+        candidate={'event_key':article['event_key'],'entities':['Fixture Product'],'section_id':'fixture',
+                   'importance':'重要','source_ids':['s1']}
+        settings=Settings({**self.settings.values,'editions':[{'id':'acgn','name':'ACGN','sections':['fixture']}],
+                           'search':{'mode':'bounded'}},self.settings.data,self.settings.web,self.settings.base_url)
+        review={'ok':True,'summary_ok':True,'article_reviews':[{'event_key':article['event_key'],'ok':True,'problems':[]}]}
+        with patch('newspaper.pipeline.utcnow',return_value=cutoff+timedelta(minutes=1)), \
+             patch('newspaper.pipeline.bounded_research',return_value=([source],[candidate],[],[],{})) as research, \
+             patch('newspaper.pipeline.Model.request',side_effect=[doc,review]):
+            result=generate(settings,self.store,notify=False,cutoff=cutoff)
+        self.assertEqual(result['state'],'published')
+        final=self.store.document(self.day+'/acgn')
+        self.assertEqual(final['window_end'],cutoff.isoformat())
+        self.assertEqual(final['window_start'],self.window['window_start'])
+        self.assertEqual(research.call_args.args[2]['window_end'],cutoff.isoformat())
+
+    def test_manual_cutoff_rejects_ambiguous_or_out_of_range_times(self):
+        now=datetime.fromisoformat(self.day+'T21:05:00+08:00')
+        values=[now.replace(tzinfo=None),now+timedelta(minutes=1),now-timedelta(days=1),now.replace(hour=11)]
+        with patch('newspaper.pipeline.utcnow',return_value=now),patch('newspaper.pipeline.Model') as model:
+            for cutoff in values:
+                with self.subTest(cutoff=cutoff),self.assertRaises(ValueError):
+                    generate(self.settings,self.store,cutoff=cutoff)
+            model.assert_not_called()
+
     def test_general_importance_candidates_are_discarded_without_blocking_edition(self):
         candidate={'event_key':'e','entities':['thing'],'section_id':'fixture','importance':'一般','source_ids':['s1']}
         self.assertEqual(validate_selection({'candidates':[candidate]},self.settings,[self.source],2),[])

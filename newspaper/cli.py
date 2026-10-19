@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from .config import ROOT, Settings
@@ -22,6 +23,8 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run")
     run.add_argument("--no-notify", action="store_true", help="Publish a preview without enqueueing email or Telegram")
+    run.add_argument("--cutoff", type=datetime.fromisoformat,
+                     help="Explicit timezone-aware cutoff for today's issue; defaults to noon")
     for cmd in [ "build", "clean", "notify", "status", "doctor"]:
         commands.add_parser(cmd)
     legacy = commands.add_parser("import-legacy")
@@ -43,7 +46,7 @@ def main() -> int:
             store = Store(settings)
             try:
                 if args.command == "run":
-                    result = generate(settings, store, notify=not args.no_notify)
+                    result = generate(settings, store, notify=not args.no_notify, cutoff=args.cutoff)
                 elif args.command == "build":
                     result = build(settings, store)
                 elif args.command == "clean":

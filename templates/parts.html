@@ -1,0 +1,34 @@
+{% macro articles(view, home=false) %}
+{% if view.count %}
+{% for section in view.sections %}
+<section class="news-section" id="{{ section.anchor }}" data-outline>
+  {% if home %}<h3 class="section-title">{{ section.name }}</h3>{% else %}<h2 class="section-title">{{ section.name }}</h2>{% endif %}
+  {% for article in section.articles %}
+  <article class="story" id="{{ article.anchor }}" data-outline>
+    {% if home %}<h4 class="story-title">{{ article.title }}</h4>{% else %}<h3 class="story-title">{{ article.title }}</h3>{% endif %}
+    <p class="story-meta"><time>{{ article.time }}</time>{% if article.importance %}<span>{{ article.importance }}</span><span>可靠性 {{ article.reliability }}</span>{% endif %}{% if article.follow_up %}<span>进展</span>{% endif %}</p>
+    <div class="news-body">{% for paragraph in article.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}</div>
+    {% if article.references %}<p class="story-sources">来源：{% for reference in article.references %}<a href="{{ reference.url }}" title="{{ reference.title }}" target="_blank" rel="noopener noreferrer">{{ reference.label }}</a>{% if not loop.last %}<span aria-hidden="true"> · </span>{% endif %}{% endfor %}</p>{% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endfor %}
+{% else %}<p class="empty-state">本期未收录新闻。</p>{% endif %}
+{% endmacro %}
+
+{% macro contents(groups) %}
+<aside class="contents" aria-label="文章目录">
+  <details id="contents-panel" open>
+    <summary>目录</summary>
+    <nav aria-label="文章目录导航">
+    {% for group in groups %}
+      <a class="toc-edition" href="#{{ group.anchor }}">{{ group.label }}</a>
+      {% for section in group.sections %}
+      <a class="toc-section" href="#{{ section.anchor }}">{{ section.name }}</a>
+      {% for article in section.articles %}<a class="toc-article" href="#{{ article.anchor }}">{{ article.title }}</a>{% endfor %}
+      {% endfor %}
+    {% endfor %}
+    </nav>
+  </details>
+</aside>
+{% endmacro %}

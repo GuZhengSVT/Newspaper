@@ -13,6 +13,7 @@ from jsonschema import ValidationError
 from .config import TZ, Settings
 from .bounded import research as bounded_research, supplement as bounded_supplement
 from .model import Model
+from .style import style_issues
 from .evidence import selected_sources, used_evidence, validate_selection
 from .notify import deliver, enqueue
 from .publish import build, markdown
@@ -151,6 +152,20 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                     else:
                         validate_report(doc, settings, contexts, history, window)
                     if edition["id"]:
+                        length_problems = style_issues(doc)
+                        if length_problems and attempt == 0:
+                            keys = {p["event_key"] for p in length_problems}
+                            shortened = copy.deepcopy(doc)
+                            for sec in shortened["sections"]:
+                                sec["articles"] = [a for a in sec["articles"] if a["event_key"] in keys]
+                            patch = client.request("repair", {"window": window, "report": shortened,
+                                "event_keys": list(keys), "sources": used_evidence(shortened, contexts), "schema": SCHEMA,
+                                "feedback": {"length_limits": length_problems,
+                                    "problems": ["压缩超长正文，保留核心事实及必要条件，删除宣传数据、无关背景和重复说明。不要用删除整条代替缩写。"]}})
+                            doc = apply_repair(doc, patch, keys)
+                        oversized = {p["event_key"] for p in style_issues(doc)}
+                        doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
+                                                      {c["event_key"] for c in candidates} - oversized)
                         planned = {c["event_key"] for c in candidates}
                         if any(a["event_key"] not in planned for sec in doc["sections"] for a in sec["articles"]):
                             raise ValueError("Unselected event in report")

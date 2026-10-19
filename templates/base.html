@@ -1,13 +1,23 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light dark"><title>{% block title %}Newspaper{% endblock %}</title>
-  <link rel="stylesheet" href="/assets/site.css"><script defer src="/assets/site.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}每日新闻{% endblock %}</title>
+  <link rel="stylesheet" href="/assets/site.css">
+  <script defer src="/assets/site.js"></script>
 </head>
 <body>
-  <header class="masthead"><a class="wordmark" href="/">Newspaper<span>每日新闻</span></a><nav aria-label="主导航"><a href="/">日报归档</a><a href="/feed.xml">RSS 订阅</a><button id="font-size" type="button" aria-label="切换正文字号">Aa</button><button id="theme" type="button" aria-label="切换明暗主题">◐</button></nav></header>
-  <main>{% block body %}{% endblock %}</main>
-  <footer>Newspaper · 北京时间每天 12:00 开始生成 · 仅保留最近 30 天<br>AI 辅助检索与整理，请结合原始来源阅读。</footer>
+  <a class="skip-link" href="#main-content">跳至正文</a>
+  <header class="masthead">
+    <a class="wordmark" href="/">每日新闻</a>
+    <nav class="site-nav" aria-label="主导航">
+      <a href="/archive/">往期日报</a>
+      <a href="/feed.xml">订阅</a>
+      <button id="theme" type="button" aria-label="切换深浅配色">配色</button>
+    </nav>
+  </header>
+  <main id="main-content">{% block body %}{% endblock %}</main>
 </body>
 </html>

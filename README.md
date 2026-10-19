@@ -57,9 +57,13 @@ Each section independently supports:
 - `prompts.plan/select/edit/review/repair/compress/collect`: extra instructions scoped to that section. Global `[prompts]` also supports text and `<stage>_file`; `editorial`/`editorial_file` apply to editing and evidence stages. Custom instructions do not disable evidence validation.
 - `filter.importance`: schema values `重大`/`重要`; `filter.reliability`: `A`/`B`; `exclude_keywords`: literal substring exclusions; `require_primary`: require primary official evidence for core facts. Importance labels remain Chinese schema enums even with other topic names.
 - `format`: character and paragraph limits, including separate limits for major stories. An overlong article receives bounded compression and review.
-- `sources`: independently fetched `rss` (RSS/Atom), `index` (HTML links), or `page` (the URL itself). Mark `required = true` to make failure to read a source fail that publication. A successfully read empty feed may legitimately have no recent items. Reading a source does not guarantee its stories pass screening.
+- `search.domains`: domains worth a targeted gap search. Passed to the planning model as a hint only; nothing is fetched or counted as read because it is listed.
+- `sources`: independently fetched `rss` (RSS/Atom), `index` (HTML links, optionally narrowed by a `link_pattern` regex), or `page` (the URL itself); `enabled = false` temporarily skips one. Mark `required = true` to make failure to read a source fail that publication.
+- `discovery`: `max_indexes_per_edition` (1–128), `max_links_per_index` (1–30), `max_previews_per_section` (1–60, applied round-robin across publishers so an early source cannot crowd out the rest) and `max_gap_queries` (0–40, the total top-up search budget for sections that already have source coverage).
 
-Required sources are prioritized within the discovery budget; exceeding the source budget fails rather than silently omitting them. Discovered links and search results share the source fetch budget. All selected articles still need original evidence, timestamps within the reporting window and final review.
+Collection reads every enabled configured source **before** searching, then hands those results and their headlines to the planner so search only fills gaps. A section with no fixed queries must issue at least one search when no configured source produced an item inside the window; a section whose sources did produce items may skip search entirely. Only a source that actually yielded in-window items counts as covered, so a feed that was read successfully but had no update in the last 24 hours is still a gap.
+
+Exceeding the source or discovery budget fails rather than silently omitting sources or sections. Discovered links and search results share the source fetch budget. All selected articles still need original evidence, timestamps within the reporting window and final review.
 
 ## Calendar and delivery tasks
 

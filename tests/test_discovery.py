@@ -198,7 +198,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_official_directory_candidate_enters_the_same_selection_and_fetch_flow(self):
         client=Mock();candidate={'event_key':'fixture|release|one','entities':['fixture'],'section_id':'fixture',
-                                'importance':'重要','source_ids':['s2']}
+                                'importance':'重要','source_ids':['s1']}
         client.request.side_effect=[{'queries':[{'section_id':'fixture','query':'recent release'}]},
                                     {'candidates':[candidate]}]
         search=[{'section_id':'fixture','engines_ok':1,'sources':[
@@ -210,7 +210,7 @@ class DiscoveryTests(unittest.TestCase):
              patch('newspaper.bounded.fetch',return_value=[self.source]) as fetch:
             sources,candidates,_,_,metrics=research(self.settings,client,self.window,self.root,{})
         self.assertEqual(fetch.call_args.args[1][0]['url'],self.source['url'])
-        self.assertEqual(sources[0]['id'],'s2')
+        self.assertEqual(sources[0]['id'],'s1')
         self.assertEqual(len(candidates),1)
         self.assertEqual(metrics['discovery_links'],1)
 

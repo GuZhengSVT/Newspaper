@@ -26,8 +26,10 @@ edit = "Write concise, readable news in the intended publication language."
 review = ""
 
 [discovery]
-max_indexes_per_edition = 16
-max_links_per_index = 20
+max_indexes_per_edition = 16   # 1-128. Exceeding it is an error, never a silent skip.
+max_links_per_index = 20       # 1-30 links taken from each directory page.
+max_previews_per_section = 24  # 1-60 candidates per section handed to screening, round-robin across publishers.
+max_gap_queries = 3            # 0-40 extra searches allowed for sections already covered by their sources.
 
 # First-level groups: names and IDs are entirely yours.
 [[groups]]
@@ -55,6 +57,7 @@ queries = []                      # empty: AI plans using scope, keywords, langu
 languages = ["en"]
 # queries = ["research announcements after:{window_start}", "research release {date}"]
 # Supported placeholders: {date}, {window_start}, {window_end} (ISO dates).
+# domains = ["agency.example.org", "lab.example.edu"]   # hints for a targeted gap search; not fetched, not counted as read.
 [sections.filter]
 importance = ["重大", "重要"]       # schema values: major, important
 reliability = ["A", "B"]           # A: primary/corroborated; B: attributed credible reporting
@@ -71,10 +74,15 @@ select = "Exclude routine publicity and unsupported breakthrough claims."
 edit = "Explain the result and its important limitations."
 review = "Check whether the evidence supports the claimed stage of research."
 # Optional per-section source. Replace the example URL before enabling it.
+# Every enabled source is read before any search, and the result is given to the planner
+# so search only fills the gaps. A source that was read but had no in-window item is still
+# treated as a gap; it never becomes a reason to skip searching.
 # [[sections.sources]]
 # url = "https://publisher.example.org/feed.xml"
 # kind = "rss"                    # rss | index | page
+# enabled = true                  # false temporarily skips one source
 # required = true                 # unavailable required sources fail this publication; no silent success
+# link_pattern = "/research/20\d{2}/[^/#?]+$"   # kind="index" only: regex on the absolute link URL
 
 [[sections]]
 id = "interactive-media"

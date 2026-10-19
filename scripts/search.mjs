@@ -1,5 +1,6 @@
 // Execute only the pinned DSH plugin's keyless engines. No LLM/tool loop or daemon.
 import {searchBing, searchDdgHtml, searchExaMCP, searchAnysearch, searchKeenableMCP} from 'dsh-free-search';
+import {configureProxy} from './network.mjs';
 
 export async function searchQuery(item, engines, timeoutMs = 20000, state = new Map(), providers = null, timeRange = {days:2}) {
   // Bing HTML, AnySearch and anonymous Exa do not implement timeRange.
@@ -37,6 +38,7 @@ export async function searchQuery(item, engines, timeoutMs = 20000, state = new 
 }
 
 async function main() {
+  configureProxy();
   let input='';for await (const chunk of process.stdin) input+=chunk;
   const {queries,engines=['bing','keenable','exa'],window_start}=JSON.parse(input);
   const timeRange=window_start ? {after:window_start.slice(0,10),days:Math.max(1,Math.ceil((Date.now()-Date.parse(window_start))/86400000))} : {days:2};

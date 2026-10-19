@@ -102,6 +102,11 @@ class Settings:
         from .schedule import validate_schedule
         ZoneInfo(self.values.get('project', {}).get('timezone', 'UTC'))
         self.editions  # Validate group/section assignment before any work begins.
+        discovery=self.values.get('discovery',{})
+        for key,default,minimum,maximum in [('max_indexes_per_edition',32,1,128),('max_links_per_index',15,1,30),
+                                          ('max_gap_queries',3,0,40),('max_previews_per_section',24,1,60)]:
+            value=discovery.get(key,default)
+            if type(value) is not int or not minimum<=value<=maximum:raise ValueError('Invalid discovery setting: '+key)
         validate_schedule(self.values.get('schedule', {}))
         for group in self.editions:validate_schedule({**self.values.get('schedule',{}), **group.get('schedule',{})})
         for section in self.sections:
@@ -114,6 +119,7 @@ class Settings:
             search=section.get('search',{})
             if type(search.get('query_count',2)) is not int or not 1<=search.get('query_count',2)<=8:raise ValueError('Invalid query count')
             if not isinstance(search.get('queries',[]),list) or any(not isinstance(q,str) or not q.strip() or len(q)>220 for q in search.get('queries',[])):raise ValueError('Invalid fixed query')
+            if not isinstance(search.get('domains',[]),list) or any(not isinstance(d,str) or not re.fullmatch(r'[a-zA-Z0-9.-]+',d) for d in search.get('domains',[])):raise ValueError('Invalid search domain')
             rules=section.get('filter',{})
             if set(rules)-{'importance','reliability','exclude_keywords','require_primary'}:raise ValueError('Unknown section filter')
             if not set(rules.get('importance',['重大','重要'])) <= {'重大','重要'}:raise ValueError('Invalid importance filter')
@@ -122,6 +128,10 @@ class Settings:
                 from .research import source_url
                 source_url(source['url'])
                 if source.get('kind','index') not in {'index','rss','page'}:raise ValueError('Invalid source kind')
+                if type(source.get('enabled',True)) is not bool:raise ValueError('Source enabled must be boolean')
+                if source.get('link_pattern'):
+                    if not isinstance(source['link_pattern'],str) or len(source['link_pattern'])>500:raise ValueError('Invalid source link pattern')
+                    re.compile(source['link_pattern'])
             if set(section.get('prompts',{}))-{'plan','select','edit','review','repair','compress','collect'}:raise ValueError('Unknown section prompt stage')
         home=self.values.get('homepage',{})
         if home.get('mode','groups') not in {'groups','sections','index'}:raise ValueError('Invalid homepage mode')

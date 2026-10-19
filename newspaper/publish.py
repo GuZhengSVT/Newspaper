@@ -66,7 +66,7 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
             day = entry["day"]
             doc = store.document(day)
             directory = release / "daily" / day
-            directory.mkdir(parents=True)
+            directory.mkdir(parents=True, exist_ok=True)
             source = settings.data / "editions" / day
             md = (source / "report.md").read_text()
             legacy_body = md

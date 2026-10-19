@@ -51,6 +51,22 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
     key = day + ("/" + edition["id"] if edition["id"] else "")
     if store.published(key):
         return {"state": "already_published", "edition": edition["id"], "date": day}
+    if store.db.execute("SELECT 1 FROM editions WHERE day=? AND status='ready'", (key,)).fetchone():
+        doc = store.document(key)
+        evidence = json.loads((settings.data / "editions" / key / "evidence.json").read_text())
+        window = {k: doc[k] for k in ["date", "window_start", "window_end"]}
+        validate_report(doc, settings, evidence["sources"], store.history(), window)
+        build(settings, store)
+        store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
+        store.db.execute("INSERT INTO runs(day,started_at,finished_at,status,metrics) VALUES(?,?,?,'published',?)",
+                         (key, now.timestamp(), utcnow().timestamp(), json.dumps({"resumed_from_ready": True})))
+        store.db.commit()
+        if notify:
+            enqueue(settings, store, key)
+        return {"state": "published", "resumed": True, "edition": edition["id"], "date": day,
+                "articles": sum(len(s["articles"]) for s in doc["sections"]),
+                "url": settings.base_url + "/daily/" + key + "/",
+                **({"notifications": deliver(settings, store)} if notify else {})}
     end = datetime.combine(now.date(), time(12), TZ)
     window = {"date": day, "window_start": (end - timedelta(days=1)).isoformat(), "window_end": end.isoformat()}
     cursor = store.db.execute("INSERT INTO runs(day,started_at,status) VALUES(?,?,'running')", (key, now.timestamp()))
@@ -58,6 +74,11 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
     store.db.commit()
     client = Model(settings)
     metrics = {"dsh_calls": 0, "dsh_tokens": None, "cache_sources": 0}
+    def record_stage(stage):
+        metrics.update(stage=stage, model_calls=client.usage)
+        store.db.execute("UPDATE runs SET metrics=? WHERE id=?", (json.dumps(metrics), run_id))
+        store.db.commit()
+    client.on_stage = record_stage
     try:
         with tempfile.TemporaryDirectory(dir=settings.data / "tmp", prefix="run-") as temp:
             work = Path(temp)
@@ -82,7 +103,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                     try:
                         collections.append(gather(settings, group, window, work / f"collect-{index}", cache=cache))
                     except Exception as exc:
-                        coverage.append(group["name"] + "检索未完成（" + type(exc).__name__ + "），本期覆盖不完整。")
+                        coverage.append(group["name"] + "的部分资料检索未完成，本期覆盖受限。")
                 sources = list({s["id"]: s for c in collections for s in c["sources"]}.values())
                 if not sources:
                     raise ValueError("No fetched source material; refusing to publish an empty success")
@@ -92,7 +113,6 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         "sources": [{**s, "content": s["content"][:2200]} for s in sources],
                         "candidate_limit": limit})
                     candidates = validate_selection(selection, settings, sources, limit)
-                    coverage.extend(str(n)[:600] for n in selection.get("coverage_notes", [])[:15])
                     history = store.related_history(candidates)
                     contexts = selected_sources(sources, candidates)
                 else:
@@ -109,7 +129,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                     scoped_candidates = [c for c in candidates if c["event_key"] in repair_keys]
                     repair_contexts = selected_sources(sources, scoped_candidates) if edition["id"] else contexts
                     patch = client.request("repair", {"window": window, "report": doc, "event_keys": repair_keys,
-                        "sources": repair_contexts, "history": history, "feedback": feedback})
+                        "sources": repair_contexts, "history": history, "feedback": feedback, "schema": SCHEMA})
                     doc = apply_repair(doc, patch, set(repair_keys))
                 else:
                     doc = client.request("edit", payload)
@@ -118,14 +138,18 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 if edition["id"]:
                     doc["edition"] = edition["id"]
                     doc["title"] = day + " " + edition["name"]
-                    doc["coverage_notes"] = list(dict.fromkeys(coverage + doc.get("coverage_notes", [])))[:30]
+                    doc["coverage_notes"] = list(dict.fromkeys(coverage))[:5]
                 # Only references actually cited in the draft enter the public report.
                 used = {e["source_id"] for section in doc["sections"] for article in section["articles"]
                         for fact in article["facts"] for e in fact["evidence"]}
                 doc["sources"] = [{k: src[k] for k in ["id", "url", "title", "published_at"]}
                                   for src in contexts if src["id"] in used]
                 try:
-                    validate_report(doc, settings, contexts, history, window)
+                    if edition["id"]:
+                        doc = filter_invalid_articles(doc, settings, contexts, store.history(), window,
+                                                      {c["event_key"] for c in candidates})
+                    else:
+                        validate_report(doc, settings, contexts, history, window)
                     if edition["id"]:
                         planned = {c["event_key"] for c in candidates}
                         if any(a["event_key"] not in planned for sec in doc["sections"] for a in sec["articles"]):
@@ -142,10 +166,19 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 evidence = used_evidence(doc, contexts)
                 review = client.request("review", {"window": window, "sections": settings.sections,
                     "report": doc, "sources": evidence, "history": history, "candidates": candidates,
-                    "collection_succeeded": True})
-                if review.get("ok") is True and not review.get("problems") and not review.get("research_queries"):
+                    "collection_status": {"any_original_fetched": bool(sources), "coverage_notes": coverage}})
+                if (review.get("ok") is True and not review.get("problems") and not review.get("research_queries")
+                    and (not edition["id"] or review.get("summary_ok") is True)):
+                    if edition["id"]:
+                        checked = keep_approved(doc, review)
+                        if sum(len(s["articles"]) for s in checked["sections"]) != sum(len(s["articles"]) for s in doc["sections"]):
+                            raise ValueError("Contradictory final review verdicts")
                     break
                 if attempt == 1:
+                    if edition["id"]:
+                        doc = keep_approved(doc, review)
+                        validate_report(doc, settings, contexts, history, window)
+                        break
                     raise ValueError("Evidence review rejected the report")
                 feedback = review
                 existing = {a["event_key"] for sec in doc["sections"] for a in sec["articles"]}
@@ -201,6 +234,77 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
         store.db.commit()
 
 
+def filter_invalid_articles(doc: dict, settings: Settings, sources: list[dict], history: list[dict],
+                            window: dict, allowed: set[str]) -> dict:
+    """A bad quotation excludes its article, never weakens evidence requirements."""
+    base = copy.deepcopy(doc)
+    for section in base["sections"]:
+        section["articles"] = []
+        section["empty_reason"] = "候选核验中。"
+    validate_report(base, settings, sources, history, window)
+    result = copy.deepcopy(doc)
+    seen = set()
+    rejected = False
+    for index, section in enumerate(result["sections"]):
+        kept = []
+        for article in section["articles"]:
+            try:
+                single = copy.deepcopy(base)
+                single["sections"][index]["articles"] = [article]
+                validate_report(single, settings, sources, history, window)
+                if article["event_key"] not in allowed or normalize(article["event_key"]) in seen:
+                    raise ValueError("Unselected or repeated event")
+            except (ValueError, ValidationError):
+                rejected = True
+                continue
+            seen.add(normalize(article["event_key"]))
+            kept.append(article)
+        section["articles"] = kept
+        if kept:
+            section["empty_reason"] = ""
+        if not kept:
+            section["empty_reason"] = "候选消息未达到证据核验标准。"
+    if rejected:
+        articles = [a for s in result["sections"] for a in s["articles"]]
+        result["summary"] = ("本期收录" + str(len(articles)) + "条新闻。" if articles else
+                             "本期未收录新闻：候选消息未达到证据核验标准。")
+        result["highlights"] = [a["title"] for a in articles[:5]]
+        result["coverage_notes"] = list(dict.fromkeys(result.get("coverage_notes", []) +
+            ["部分候选资料未能充分核实，未予收录。"]))[:5]
+    used = {e["source_id"] for sec in result["sections"] for a in sec["articles"] for f in a["facts"] for e in f["evidence"]}
+    result["sources"] = [s for s in result["sources"] if s["id"] in used]
+    validate_report(result, settings, sources, history, window)
+    return result
+
+
+def keep_approved(doc: dict, review: dict) -> dict:
+    """Publish only individual articles the final review explicitly approved."""
+    expected = {a["event_key"] for s in doc["sections"] for a in s["articles"]}
+    verdicts = review.get("article_reviews", [])
+    if (not isinstance(verdicts, list) or len(verdicts) != len(expected)
+        or {r.get("event_key") for r in verdicts} != expected
+        or any(not isinstance(r.get("ok"), bool) or not isinstance(r.get("problems"), list) for r in verdicts)):
+        raise ValueError("Final review did not cover every article")
+    approved = {r["event_key"] for r in verdicts if r["ok"] is True and not r["problems"]}
+    result = copy.deepcopy(doc)
+    for section in result["sections"]:
+        section["articles"] = [a for a in section["articles"] if a["event_key"] in approved]
+        if section["articles"]:
+            section["empty_reason"] = ""
+        else:
+            section["empty_reason"] = "候选消息未达到证据核验标准。"
+    articles = [a for s in result["sections"] for a in s["articles"]]
+    # Deterministic replacements cannot introduce new factual claims.
+    result["highlights"] = [a["title"] for a in articles[:5]]
+    result["summary"] = ("本期收录" + str(len(articles)) + "条通过核验的新闻。" if articles else
+                         "本期未收录新闻：候选消息未达到证据核验标准。")
+    used = {e["source_id"] for a in articles for f in a["facts"] for e in f["evidence"]}
+    result["sources"] = [s for s in result["sources"] if s["id"] in used]
+    result["coverage_notes"] = list(dict.fromkeys(result.get("coverage_notes", []) +
+        (["部分候选消息未能充分核实，未予收录。"] if approved != expected else [])))[:30]
+    return result
+
+
 def apply_repair(doc: dict, patch: dict, allowed: set[str]) -> dict:
     result = copy.deepcopy(doc)
     touched = set()
@@ -217,7 +321,9 @@ def apply_repair(doc: dict, patch: dict, allowed: set[str]) -> dict:
             raise ValueError("Repair changed event identity")
         section["articles"] = [replacement if a["event_key"] == key else a for a in section["articles"]
                                if a["event_key"] != key or replacement is not None]
-        if not section["articles"]:
+        if section["articles"]:
+            section["empty_reason"] = ""
+        else:
             section["empty_reason"] = "候选未通过证据复核。"
     result["summary"] = patch["summary"]
     result["highlights"] = patch["highlights"]

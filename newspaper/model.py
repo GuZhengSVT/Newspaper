@@ -23,11 +23,14 @@ class Model:
     def __init__(self, settings: Settings):
         self.cfg = settings.values["model"]
         self.usage = []
+        self.on_stage = None
 
     def request(self, prompt: str, payload: dict) -> dict:
         key = os.environ.get(self.cfg.get("api_key_env", "D1API_API_KEY"))
         if not key:
             raise ValueError("Model credentials are not configured")
+        if self.on_stage:
+            self.on_stage(prompt)
         started = time.monotonic()
         policy = ROOT / "prompts" / "editorial.md"
         system = (policy.read_text() + "\n" if policy.exists() else "") + (ROOT / "prompts" / f"{prompt}.md").read_text()
@@ -46,17 +49,18 @@ class Model:
                                 {"role": "user", "content": encoded},
                             ],
                             "max_tokens": self.cfg.get("max_tokens", 12000),
+                            "response_format": {"type": "json_object"},
                         },
                     )
                 except httpx.TransportError:
                     if attempt == 2:
                         self.usage.append({"stage": prompt, "http_attempts": 3, "error_type": "TransportError", "tokens": None})
                         raise
-                    time.sleep((5, 15)[attempt])
+                    time.sleep(self.cfg.get("retry_delays_seconds", [15, 60])[attempt])
                     continue
                 if response.status_code not in {429, 502, 503, 504} or attempt == 2:
                     break
-                time.sleep((5, 15)[attempt])
+                time.sleep(self.cfg.get("retry_delays_seconds", [15, 60])[attempt])
             if response.is_error:
                 self.usage.append({"stage": prompt, "http_attempts": attempt + 1,
                                    "status_code": response.status_code, "tokens": None})

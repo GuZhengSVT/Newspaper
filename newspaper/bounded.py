@@ -39,6 +39,7 @@ def fetch(settings, candidates: list[dict], work: Path, cache: dict) -> list[dic
 
 def research(settings, client, window: dict, work: Path, cache: dict) -> tuple[list,list,list,list,dict]:
     section_ids={s['id'] for s in settings.sections}
+    names={s['id']:s['name'] for s in settings.sections}
     limit=min(40,len(section_ids)*2)
     plan=client.request('plan',{'window':window,'sections':settings.sections,'query_limit':limit})
     queries=plan['queries']
@@ -48,15 +49,16 @@ def research(settings, client, window: dict, work: Path, cache: dict) -> tuple[l
         raise ValueError('Invalid search plan or missing section')
     results=search(settings,queries,work)
     previews={}
+    url_ids={}
     coverage=[]
     for result in results:
         if not result['engines_ok']:
-            coverage.append(result['section_id']+' 的一组检索未完成，本期覆盖受限。')
+            coverage.append(names[result['section_id']]+'的部分资料检索未完成，本期覆盖受限。')
         for item in result['sources']:
             try:url=source_url(item['url'])
             except ValueError:continue
-            sid='s-'+hashlib.sha256(url.encode()).hexdigest()[:16]
-            previews.setdefault(sid,{'id':sid,**item,'url':url,'content':item.get('snippet','')})
+            sid=url_ids.setdefault(url,'s'+str(len(url_ids)+1))
+            previews.setdefault(sid,{'id':sid,**{k:v for k,v in item.items() if k!='snippet'},'url':url,'content':item.get('snippet','')})
     if not previews:raise ValueError('All search results empty; cannot claim a no-news edition')
     candidate_limit=settings.values.get('search',{}).get('max_candidates_per_edition',12)
     selection=client.request('select',{'window':window,'sections':settings.sections,'sources':list(previews.values()),
@@ -66,7 +68,7 @@ def research(settings, client, window: dict, work: Path, cache: dict) -> tuple[l
     selected={sid for c in candidates for sid in c['source_ids'][:3]}
     cap=settings.values.get('search',{}).get('max_fetches_per_edition',24)
     selected=list(dict.fromkeys(sid for c in candidates for sid in c['source_ids'][:3]))[:cap]
-    sources=fetch(settings,[previews[sid] for sid in selected],work,cache)
+    sources=[{**s,'id':url_ids[source_url(s['url'])]} for s in fetch(settings,[previews[sid] for sid in selected],work,cache)]
     available={s['id'] for s in sources}
     kept=[]
     for candidate in candidates:
@@ -74,7 +76,6 @@ def research(settings, client, window: dict, work: Path, cache: dict) -> tuple[l
         if candidate['source_ids']:kept.append(candidate)
         else:coverage.append('部分候选原文无法取得，已放弃报道，不能据此判断该板块没有重要事件。')
     if candidates and not sources:raise ValueError('No selected originals accessible')
-    coverage+=selection.get('coverage_notes',[])[:15]
     metrics={'plugin_queries':len(queries),'search_engines_ok':sum(r['engines_ok'] for r in results),
              'result_urls':len(previews),'fetched_sources':len(sources)}
     return sources,kept,coverage,results,metrics

@@ -131,7 +131,7 @@ def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None
             return None
         return {"id": "s-" + hashlib.sha256(url.encode()).hexdigest()[:16], "url": url,
                 "title": str(candidate.get("title", ""))[:300],
-                "published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat()}
+                "published_at": None, "search_published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat()}
     except (ValueError, KeyError, subprocess.SubprocessError):
         return None
 

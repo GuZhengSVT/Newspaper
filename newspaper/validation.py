@@ -54,8 +54,11 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
                 raise ValueError("A reliability requires primary authority or independent corroboration")
             referenced = set()
             for fact in article["facts"]:
-                if (doc.get("schema_version") == 2 and article["verification"] == "corroborated"
-                    and fact.get("kind", "fact") == "fact"):
+                mode = fact.get("verification", article["verification"])
+                if (doc.get("schema_version") == 2 and article["reliability"] == "A"
+                    and fact.get("kind", "fact") == "fact" and mode == "single_source"):
+                    raise ValueError("A-rated core facts need primary authority or independent corroboration")
+                if (doc.get("schema_version") == 2 and mode == "corroborated"):
                     domains = {urlsplit(source_map[e["source_id"]]["url"]).hostname
                                for e in fact["evidence"] if e["source_id"] in source_map}
                     if len(domains) < 2:

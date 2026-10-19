@@ -23,6 +23,9 @@ def clean(settings: Settings, store: Store, now: float | None = None) -> dict:
         for path in [current / "index.html", current / "feed.xml", current / "search.json", *current.glob("feed-*.xml")]:
             path.unlink(missing_ok=True)
         for directory in (settings.web / "releases").iterdir():
+            if directory != current.resolve():
+                shutil.rmtree(directory)
+                continue
             dated = set(expired)
             for path in (directory / "daily").glob("*"):
                 try:

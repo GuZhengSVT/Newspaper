@@ -9,7 +9,7 @@ from unittest.mock import patch
 import test_newspaper as fixtures
 from newspaper.config import Settings
 from newspaper.evidence import selected_sources, used_evidence, validate_selection
-from newspaper.pipeline import generate, apply_repair
+from newspaper.pipeline import generate, apply_repair, keep_approved, filter_invalid_articles
 from newspaper.publish import build, markdown
 from newspaper.research import source_url, gather
 from newspaper.retention import clean
@@ -26,6 +26,7 @@ class EditionTests(unittest.TestCase):
         doc.update(schema_version=2, edition=slug, title=slug)
         a = doc['sections'][0]['articles'][0]
         a.update(importance='重要', reliability='A', entities=['Fixture Product'], verification='official_statement')
+        for f in a['facts']:f.update(kind='fact',verification='official_statement')
         return doc
 
     def save(self, doc):
@@ -66,6 +67,7 @@ class EditionTests(unittest.TestCase):
 
     def test_core_claim_requires_its_own_corroboration(self):
         doc=self.issue('acgn');doc['sections'][0]['articles'][0]['verification']='corroborated'
+        doc['sections'][0]['articles'][0]['facts'][0]['verification']='corroborated'
         extra={**self.source,'id':'s2','url':'https://another.test/source'}
         doc['sources'].append({k:extra[k] for k in ['id','url','title','published_at']})
         with self.assertRaises(ValueError):
@@ -144,7 +146,7 @@ class EditionTests(unittest.TestCase):
         from newspaper.bounded import research
         from unittest.mock import Mock
         import hashlib
-        sid='s-'+hashlib.sha256(self.source['url'].encode()).hexdigest()[:16]
+        sid='s1'
         source={**self.source,'id':sid}
         client=Mock();client.request.side_effect=[{'queries':[{'section_id':'fixture','query':'current announcement'}]},
           {'candidates':[{'event_key':'fixture|release|one','entities':['fixture'],'section_id':'fixture','importance':'重要','source_ids':[sid]}]}]
@@ -166,9 +168,118 @@ class EditionTests(unittest.TestCase):
         with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
             client.return_value.__enter__.return_value.post.side_effect=[bad,good]
             model=Model(self.settings);self.assertEqual(model.request('plan',{}),{'queries':[]})
-        sleep.assert_called_once_with(5)
+        sleep.assert_called_once_with(15)
         self.assertEqual(model.usage[0]['http_attempts'],2)
         self.assertNotIn('synthetic-test-secret',str(model.usage))
+
+    def test_complete_v2_pipeline_publishes_without_push(self):
+        doc=self.issue('acgn')
+        settings=Settings({**self.settings.values,'editions':[{'id':'acgn','name':'ACGN 日报','sections':['fixture']}],
+                           'search':{'mode':'bounded'}},self.settings.data,self.settings.web,self.settings.base_url)
+        candidate={'event_key':doc['sections'][0]['articles'][0]['event_key'],'entities':['Fixture Product'],
+                   'section_id':'fixture','importance':'重要','source_ids':['s1']}
+        moment=datetime.fromisoformat(self.day+'T12:05:00+08:00')
+        with patch('newspaper.pipeline.utcnow',return_value=moment),              patch('newspaper.pipeline.bounded_research',return_value=([self.source],[candidate],[],[],{})),              patch('newspaper.pipeline.Model.request',side_effect=[doc,{'ok':True,'summary_ok':True,'article_reviews':[{'event_key':candidate['event_key'],'ok':True,'problems':[]}]}]),              patch('newspaper.pipeline.deliver') as sender:
+            result=generate(settings,self.store,notify=False)
+        self.assertEqual(result['state'],'published');sender.assert_not_called()
+        key=self.day+'/acgn'
+        self.assertTrue(self.store.published(key))
+        self.assertTrue((self.settings.web/'current/daily'/key/'index.html').is_file())
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM deliveries').fetchone()[0],0)
+
+    def test_general_importance_candidates_are_discarded_without_blocking_edition(self):
+        candidate={'event_key':'e','entities':['thing'],'section_id':'fixture','importance':'一般','source_ids':['s1']}
+        self.assertEqual(validate_selection({'candidates':[candidate]},self.settings,[self.source],2),[])
+
+    def test_failed_rebuild_purges_unserved_release_indexes(self):
+        stale=self.settings.web/'releases/stale'
+        stale.mkdir();(stale/'feed.xml').write_text('expired news summary')
+        with patch('newspaper.retention.build',side_effect=OSError('renderer unavailable')):
+            with self.assertRaises(RuntimeError):clean(self.settings,self.store)
+        self.assertFalse(stale.exists())
+
+    def test_candidate_cap_prioritizes_major_events(self):
+        base={'event_key':'e','entities':['thing'],'section_id':'fixture','importance':'重要','source_ids':['s1']}
+        major={**base,'event_key':'major','importance':'重大'}
+        result=validate_selection({'candidates':[base,major]},self.settings,[self.source],1)
+        self.assertEqual(result,[major])
+
+    def test_article_may_mix_official_and_corroborated_facts(self):
+        doc=self.issue('acgn');article=doc['sections'][0]['articles'][0]
+        article['verification']='corroborated'
+        extra={**self.source,'id':'s2','url':'https://another.test/source'}
+        doc['sources'].append({k:extra[k] for k in ['id','url','title','published_at']})
+        corroborated=copy.deepcopy(article['facts'][0]);corroborated['verification']='corroborated'
+        corroborated['evidence'].append({'source_id':'s2','quote':'This is synthetic evidence for a test'})
+        article['facts'].append(corroborated)
+        validate_report(doc,self.settings,[self.source,extra],[],self.window)
+
+    def test_unconfirmed_core_fact_cannot_hide_under_official_article_label(self):
+        doc=self.issue('acgn');doc['sections'][0]['articles'][0]['facts'][0]['verification']='single_source'
+        with self.assertRaises(ValueError):validate_report(doc,self.settings,[self.source],[],self.window)
+
+    def test_transport_restart_retry_stops_after_three_attempts(self):
+        from newspaper.model import Model
+        import httpx,os
+        with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
+            post=client.return_value.__enter__.return_value.post
+            post.side_effect=httpx.RemoteProtocolError('upstream restarted')
+            with self.assertRaises(httpx.RemoteProtocolError):Model(self.settings).request('plan',{})
+        self.assertEqual(post.call_count,3)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list],[15,60])
+
+    def test_invalid_credentials_are_not_retried_within_request(self):
+        from newspaper.model import Model
+        import httpx,os
+        response=httpx.Response(401,request=httpx.Request('POST','https://example.test/v1'))
+        with patch.dict(os.environ,{'D1API_API_KEY':'synthetic-test-secret'}),patch('newspaper.model.httpx.Client') as client,              patch('newspaper.model.time.sleep') as sleep:
+            post=client.return_value.__enter__.return_value.post;post.return_value=response
+            with self.assertRaises(httpx.HTTPStatusError):Model(self.settings).request('plan',{})
+        self.assertEqual(post.call_count,1);sleep.assert_not_called()
+
+    def test_final_review_publishes_only_explicitly_approved_articles(self):
+        doc=self.issue('acgn');article=doc['sections'][0]['articles'][0]
+        bad={**copy.deepcopy(article),'event_key':'rejected','title':'Unsupported'}
+        doc['sections'][0]['articles'].append(bad)
+        review={'article_reviews':[{'event_key':article['event_key'],'ok':True,'problems':[]},
+                                  {'event_key':'rejected','ok':False,'problems':['Unverified date']}]}
+        final=keep_approved(doc,review)
+        self.assertEqual(final['sections'][0]['articles'],[article])
+        self.assertNotIn('Unsupported',final['summary'])
+        self.assertEqual(len(doc['sections'][0]['articles']),2)
+
+    def test_incomplete_final_review_cannot_publish_partial_success(self):
+        with self.assertRaises(ValueError):keep_approved(self.issue('acgn'),{'article_reviews':[]})
+
+    def test_legacy_and_new_edition_on_same_day_share_parent_directory(self):
+        self.save(copy.deepcopy(self.doc));self.save(self.issue('acgn'))
+        build(self.settings,self.store)
+        self.assertTrue((self.settings.web/'current/daily'/self.day/'index.html').exists())
+        self.assertTrue((self.settings.web/'current/daily'/self.day/'acgn/index.html').exists())
+
+    def test_reviewed_ready_edition_resumes_without_calling_model_or_push(self):
+        doc=self.issue('acgn');self.save(doc)
+        key=edition_key(doc)
+        evidence={'sources':[self.source]}
+        (self.settings.data/'editions'/key/'evidence.json').write_text(json.dumps(evidence))
+        self.store.db.execute("UPDATE editions SET status='ready' WHERE day=?",(key,));self.store.db.commit()
+        from newspaper.pipeline import generate_edition
+        with patch('newspaper.pipeline.Model') as model,patch('newspaper.pipeline.deliver') as sender:
+            result=generate_edition(self.settings,self.store,{'id':'acgn'}, {},False)
+        model.assert_not_called();sender.assert_not_called()
+        self.assertTrue(result['resumed']);self.assertTrue(self.store.published(key))
+
+    def test_invalid_quote_excludes_only_its_article_before_ai_review(self):
+        doc=self.issue('acgn');good=doc['sections'][0]['articles'][0]
+        bad=copy.deepcopy(good);bad['event_key']='bad';bad['facts'][0]['evidence'][0]['quote']='Invented quotation not in source'
+        doc['sections'][0]['articles'].append(bad)
+        final=filter_invalid_articles(doc,self.settings,[self.source],[],self.window,{good['event_key'],'bad'})
+        self.assertEqual(final['sections'][0]['articles'],[good])
+        self.assertEqual(len(doc['sections'][0]['articles']),2)
+
+    def test_global_structure_errors_are_not_hidden_by_article_filtering(self):
+        doc=self.issue('acgn');doc['sections'][0]['id']='unconfigured'
+        with self.assertRaises(ValueError):filter_invalid_articles(doc,self.settings,[self.source],[],self.window,set())
 
 
 if __name__=='__main__':unittest.main()

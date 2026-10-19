@@ -229,6 +229,13 @@
                   "community",
                   "limitation"
                 ]
+              },
+              "verification": {
+                "enum": [
+                  "official_statement",
+                  "single_source",
+                  "corroborated"
+                ]
               }
             }
           }
@@ -285,7 +292,17 @@
                       "importance",
                       "reliability",
                       "entities"
-                    ]
+                    ],
+                    "properties": {
+                      "facts": {
+                        "items": {
+                          "required": [
+                            "kind",
+                            "verification"
+                          ]
+                        }
+                      }
+                    }
                   }
                 }
               }

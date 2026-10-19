@@ -162,7 +162,9 @@ def discover(settings, window: dict, work) -> tuple[list[dict],dict]:
     failed=[r['index_url'] for r in results if r.get('required') and r['index_status'] not in {'links','no_recent_links'}]
     if failed:raise ValueError('Required sources could not be read: '+', '.join(failed))
     good=[r for r in results if r['engines_ok']]
-    return results,{'discovery_indexes':len(indexes),'discovery_requests':len(by_url),'discovery_indexes_ok':len(good),
+    # Count fetches, not section attributions: one shared URL is one request even if two sections use it.
+    good_urls={r['index_url'] for r in good}
+    return results,{'discovery_indexes':len(indexes),'discovery_requests':len(by_url),'discovery_indexes_ok':len(good_urls),
                  'discovery_links':sum(len(r['sources']) for r in good),
                  'publisher_indexes':[{'section_id':r['section_id'],'url':r['index_url'],
                                        'status':r['index_status'],'links':len(r['sources'])} for r in results]}

@@ -105,6 +105,7 @@ class SourceFirstTests(unittest.TestCase):
         fetch.assert_called_once()
         self.assertEqual([r['section_id'] for r in results],['fixture','other'])
         self.assertEqual(metrics['discovery_requests'],1)
+        self.assertEqual(metrics['discovery_indexes_ok'],1)
 
     def test_exceeding_source_budget_is_explicit_instead_of_skipping_later_sections(self):
         self.settings.values['discovery']={'max_indexes_per_edition':1}

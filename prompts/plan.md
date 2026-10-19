@@ -2,5 +2,6 @@
 strategy=source_first 时，配置来源已先访问。source_coverage 的 titles 是现有线索，不要围绕已发现的同一公告再次宽泛搜索。优先补充这些来源未覆盖的公司、地区、题材或独立报道；search.domains 中列出值得定向检查的域名，可用于补查，不得把已失败的网站说成已读。
 mandatory_section_ids 中的板块在窗口内没有从配置来源取得任何条目，每个至少一条查询。其他板块可完全不搜索；若已有来源足够，不为凑数量消耗预算，对这些板块的补查总数不得超过 max_gap_queries，允许 queries=[]。没有近期条目不等于抓取失败；但来源本身主题狭窄、关键站点失败或内容截断时，应优先补查未覆盖内容。缺口应具体，不得仅以“再看看有无其他新闻”为由重复宽泛检索。
 按scope、keywords、search.languages及该板块plan附加提示制定查询，优先一手材料及可信采编报道，不预设主题或语言。search.query_count 是每板块上限，未指定时上限两条，总数不得超过query_limit。单条query最长220字符。
+section_query_limits 明确列出每个板块的实际查询上限。query_limit、各板块上限、max_gap_queries 必须同时满足；总预算不表示可以把所有查询集中给同一个板块。有 validation_errors 时，上次规划未通过程序校验，按其中的具体计数和上限重新生成完整规划，不能重复相同错误。不得通过漏掉 mandatory_section_ids 中的板块来缩减查询数。
 有查询的板块至少一条不带精确日期，避免日期字面量降低召回；其他查询可用窗口对应的after过滤或单日日期。不要把起止两天并排塞进同一查询，不要用未来事件执行日期替代本次披露窗口。原文最终核验日期，搜索只负责发现线索。
 仅输出JSON：{"queries":[{"section_id":"输入板块id","query":"检索词"}]}。

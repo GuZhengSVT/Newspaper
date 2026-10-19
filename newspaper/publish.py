@@ -8,6 +8,7 @@ import shutil
 import uuid
 from datetime import datetime
 from email.utils import format_datetime
+from html import escape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -43,6 +44,11 @@ def markdown(doc: dict, settings=None) -> str:
             text += [" · ".join(metadata), ""]
             for paragraph in article["paragraphs"]:
                 text += [paragraph, ""]
+            if article.get('image'):
+                image=article['image']
+                caption=re.sub(r'([\\\[\]*_`])',r'\\\1',escape(image['caption']))
+                text += [f'![{caption}](<{image["url"]}>)', '',
+                         caption+f' · [图片来源](<{image["source_url"]}>)', '']
             if article["references"]:
                 links = " · ".join(f'[{ref["label"]}](<{ref["url"]}>)' for ref in article["references"])
                 text += ["来源：" + links, ""]
@@ -170,7 +176,7 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
         (release / "search.json").write_text(json.dumps(search_index, ensure_ascii=False))
         rss = Element("rss", version="2.0")
         channel = SubElement(rss, "channel")
-        for key, value in {"title": "Newspaper", "link": settings.base_url, "description": "每日新闻 · 仅保留最近 30 天"}.items():
+        for key, value in {"title": env.globals['site_name'], "link": settings.base_url, "description": env.globals['site_name'] + " · 仅保留最近 30 天"}.items():
             SubElement(channel, key).text = value
         for entry in entries:
             item = SubElement(channel, "item")

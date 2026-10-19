@@ -17,4 +17,5 @@ research_queries只用于影响核心结论、无法通过删改非必要细节�
 只输出JSON：
 {"ok":true或false,"summary_ok":true或false,"problems":["需要修正的实质全局错误"],"research_queries":[{"section_id":"输入板块id","query":"具体补查问题"}],"affected_event_keys":["实质不合格条目的原event_key"],"article_reviews":[{"event_key":"原event_key","ok":true或false,"problems":["正文某句与原文的实质冲突及最小修改"]}]}。
 合格条目ok=true且problems=[]。根级ok仅在所有条目与摘要合格且无必要补查时为true；无错误时全局problems=[]，不要把正面评价或可选建议写进去。全文摘要错误只影响summary_ok，不连带否决已合格新闻。
+expected_event_keys 是当前实际成稿的完整事件列表，article_reviews 必须恰好覆盖这些事件，不能给已被筛选剔除的旧候选出具逐条结论。列表为空时 article_reviews 必须为 []；此时仍需根据提供的来源与板块条件核对空刊，不能凭候选曾经存在就要求恢复不合格条目。
 若二手来源注明报道由AI自动撰写且无可核实人工采编背景，不能将其当作事实证据或独立互证。对仅由这种来源支持的细节应删除或追溯可信原文，不能只加一句“AI撰写”便保留。

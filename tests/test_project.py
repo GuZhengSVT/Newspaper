@@ -19,9 +19,29 @@ from newspaper.discovery import discover
 from newspaper.pipeline import generate
 from newspaper.validation import validate_report
 from newspaper.publish import build
+from newspaper.bounded import SearchPlanError
 
 
 class CalendarTests(unittest.TestCase):
+    def test_manual_jobs_include_future_tasks_without_rewriting_the_regular_schedule(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            values={'project':{'timezone':'Asia/Shanghai'},'schedule':{'period':'daily','time':'12:00','start_date':'2026-10-20'},
+                    'editions':[{'id':'first','name':'First','sections':['a','b']}],
+                    'sections':[{'id':'a','name':'Daily'}, {'id':'b','name':'Weekly',
+                    'schedule':{'period':'weekly','weekday':'mon','start_date':'2026-10-26'}}]}
+            settings=Settings(values,root/'data',root/'web','https://example.test')
+            now=datetime.fromisoformat('2026-10-20T02:30:00+08:00')
+            self.assertEqual(jobs(settings,now),[])
+            manual=jobs(settings,now,manual=True)
+            self.assertEqual(len(manual),2)
+            self.assertTrue(all('-manual-' in job['id'] and len(job['id'])<=40 for job,window in manual))
+            self.assertTrue(all(window['window_end']==now.isoformat() for job,window in manual))
+            self.assertEqual([window['window_start'] for job,window in manual],
+                             ['2026-10-19T02:30:00+08:00','2026-10-13T02:30:00+08:00'])
+            self.assertEqual(values['sections'][1]['schedule']['start_date'],'2026-10-26')
+
     def test_weekly_monday_has_full_previous_week_and_catches_up_on_tuesday(self):
         cfg={'period':'weekly','weekday':'mon','time':'09:00'}
         w=latest_window(datetime.fromisoformat('2026-10-20T10:00:00+08:00'),cfg,'Asia/Shanghai')
@@ -130,6 +150,30 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(len(scheduled),1)
         self.assertEqual(scheduled[0][0]['id'],'first')
         self.assertEqual(len(scheduled[0][0]['sections']),2)
+
+    def test_manual_task_selector_runs_only_the_selected_complete_task(self):
+        settings=self.make_settings([{}, {'period':'weekly','weekday':'mon','start_date':'2026-10-26'}])
+        selected=jobs(settings,self.now,manual=True)[1][0]['task_id']
+        with patch('newspaper.pipeline.utcnow',return_value=self.now), \
+             patch('newspaper.pipeline.generate_edition',return_value={'state':'published'}) as run:
+            result=generate(settings,self.store,notify=False,manual=True,task_id=selected)
+        self.assertEqual(result['state'],'published');self.assertEqual(run.call_count,1)
+        job=run.call_args.args[2]
+        self.assertEqual(job['sections'],['other']);self.assertIn('-manual-',job['id'])
+        self.assertEqual(run.call_args.kwargs['publication_window']['window_end'],self.now.isoformat())
+
+    def test_failed_plan_keeps_safe_contract_details_in_run_metrics(self):
+        settings=self.make_settings();settings.values['search']={'mode':'bounded'}
+        problems=[{'code':'section_limit','section_id':'fixture','count':3,'limit':2}]
+        with patch('newspaper.pipeline.utcnow',return_value=self.now), \
+             patch('newspaper.pipeline.bounded_research',side_effect=SearchPlanError(problems)):
+            result=generate(settings,self.store,notify=False)
+        self.assertEqual(result['state'],'partial_failure')
+        rows=self.store.db.execute("select error,metrics from runs where status='failed'").fetchall()
+        self.assertEqual(len(rows),2)
+        for row in rows:
+            self.assertEqual(row['error'],'SearchPlanError')
+            self.assertEqual(json.loads(row['metrics'])['search_plan_errors'],problems)
 
     def test_partial_generation_waits_and_recovers_after_restart(self):
         settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)

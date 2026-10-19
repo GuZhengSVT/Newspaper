@@ -9,6 +9,10 @@
     {% if home %}<h4 class="story-title">{{ article.title }}</h4>{% else %}<h3 class="story-title">{{ article.title }}</h3>{% endif %}
     <p class="story-meta"><time>{{ article.time }}</time>{% if article.importance %}<span>{{ article.importance }}</span><span>可靠性 {{ article.reliability }}</span>{% endif %}{% if article.follow_up %}<span>进展</span>{% endif %}</p>
     <div class="news-body">{% for paragraph in article.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}</div>
+    {% if article.image %}<figure class="story-image">
+      <img src="{{ article.image.url }}" alt="{{ article.image.caption }}" width="{{ article.image.width }}" height="{{ article.image.height }}" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+      <figcaption>{{ article.image.caption }} · <a href="{{ article.image.source_url }}" target="_blank" rel="noopener noreferrer">图片来源</a></figcaption>
+    </figure>{% endif %}
     {% if article.references %}<p class="story-sources">来源：{% for reference in article.references %}<a href="{{ reference.url }}" title="{{ reference.title }}" target="_blank" rel="noopener noreferrer">{{ reference.label }}</a>{% if not loop.last %}<span aria-hidden="true"> · </span>{% endif %}{% endfor %}</p>{% endif %}
   </article>
   {% endfor %}

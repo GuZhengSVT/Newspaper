@@ -83,3 +83,13 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
                     referenced.add(sid)
             if article["verification"] == "corroborated" and len(referenced) < 2:
                 raise ValueError("Corroboration requires at least two source records")
+            image=article.get('image')
+            if image:
+                source=source_map.get(image['source_id'],{})
+                if (image['source_id'] not in referenced or image['source_url']!=source.get('url')
+                    or not any(i['url']==image['url'] for i in source.get('images',[]))):
+                    raise ValueError('Image is not embedded in a cited article source')
+                source_url(image['url'])
+                if (max(image['width'],image['height'])<800 or min(image['width'],image['height'])<450
+                    or max(image['width'],image['height'])/min(image['width'],image['height'])>3):
+                    raise ValueError('Image is too small or has an unsuitable aspect ratio')

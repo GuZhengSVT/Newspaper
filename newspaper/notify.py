@@ -5,6 +5,7 @@ import json
 import os
 import smtplib
 import ssl
+import time
 from email.message import EmailMessage
 from email.utils import formatdate
 
@@ -12,6 +13,7 @@ import httpx
 
 from .config import Settings
 from .storage import Store, utcnow
+from .messages import news_message, text_chunks
 
 
 def readiness(channel: str) -> bool:
@@ -27,18 +29,20 @@ def enqueue(settings: Settings, store: Store, day: str) -> None:
     store.db.commit()
 
 
-def send(settings: Settings, channel: str, day: str) -> None:
-    # Push links, not full articles or attachments: retention applies on this VPS.
-    label = json.loads((settings.data / "editions" / day / "report.json").read_text())["title"]
-    text = f"{label} Newspaper 新闻已发布。\n阅读：{settings.base_url}/daily/{day}/\nMarkdown：{settings.base_url}/downloads/{day}.md\n服务器仅保留最近 30 天。"
-    send_text(settings,channel,f"Newspaper · {label} 已更新",text,day)
+def send(settings: Settings, channel: str, day: str, *, start_part=0, on_part_sent=None) -> None:
+    doc = json.loads((settings.data / "editions" / day / "report.json").read_text())
+    subject=doc['title'];message=news_message(settings,[(day,doc)],subject)
+    send_text(settings,channel,subject,message['text'],day,html_text=message['html'],telegram_parts=message['telegram'],
+              start_part=start_part,on_part_sent=on_part_sent)
 
 
 class UncertainDelivery(RuntimeError):
     """The provider might have accepted the message; automatic retry risks duplicates."""
 
 
-def send_text(settings: Settings, channel: str, subject: str, text: str, delivery_id: str) -> None:
+def send_text(settings: Settings, channel: str, subject: str, text: str, delivery_id: str,
+              *, html_text: str | None = None, telegram_parts: list | None = None,
+              start_part: int = 0, on_part_sent=None) -> None:
     if channel == "email":
         message = EmailMessage()
         message["Subject"] = subject
@@ -48,6 +52,7 @@ def send_text(settings: Settings, channel: str, subject: str, text: str, deliver
         digest = hashlib.sha256((settings.base_url + delivery_id).encode()).hexdigest()[:24]
         message["Message-ID"] = f"<{digest}@newspaper.local>"
         message.set_content(text)
+        if html_text:message.add_alternative(html_text,subtype='html')
         security = os.environ.get("SMTP_SECURITY", "starttls")
         if security not in {"starttls", "ssl"}:
             raise ValueError("SMTP requires TLS")
@@ -71,27 +76,39 @@ def send_text(settings: Settings, channel: str, subject: str, text: str, deliver
             if not accepted:raise
     elif channel == "telegram":
         token = os.environ["TELEGRAM_BOT_TOKEN"]
+        parts=telegram_parts if telegram_parts is not None else [
+            {'method':'sendMessage','text':chunk} for chunk in text_chunks(text)]
         with httpx.Client(timeout=30) as client:
-            try:
-                response = client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
-                    "chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text, "link_preview_options": {"is_disabled": True},
-                })
-            except (httpx.ConnectError,httpx.ConnectTimeout):raise
-            except httpx.TransportError as exc:raise UncertainDelivery('Telegram acceptance unknown') from exc
-            response.raise_for_status()
-            try:accepted=response.json().get('ok')
-            except ValueError as exc:raise UncertainDelivery('Telegram response unreadable') from exc
-            if not accepted:
-                raise RuntimeError("Telegram rejected delivery")
+            for index in range(start_part,len(parts)):
+                part=parts[index];method=part['method']
+                payload={k:v for k,v in part.items() if k!='method'}
+                payload['chat_id']=os.environ['TELEGRAM_CHAT_ID']
+                if method=='sendMessage':payload['link_preview_options']={'is_disabled':True}
+                if index>start_part:time.sleep(1.1)
+                try:
+                    response=client.post(f'https://api.telegram.org/bot{token}/{method}',json=payload)
+                except (httpx.ConnectError,httpx.ConnectTimeout):raise
+                except httpx.TransportError as exc:raise UncertainDelivery('Telegram acceptance unknown') from exc
+                # Optional remote images can be blocked by hotlink protection. Text is already separate.
+                skipped=method=='sendPhoto' and response.status_code in {400,404,413,415}
+                if not skipped:
+                    response.raise_for_status()
+                    try:accepted=response.json().get('ok')
+                    except ValueError as exc:raise UncertainDelivery('Telegram response unreadable') from exc
+                    if not accepted:raise RuntimeError('Telegram rejected delivery')
+                if on_part_sent:on_part_sent(index+1)
     else:
         raise ValueError("Unknown notification channel")
 
 
 def deliver(settings: Settings, store: Store) -> dict:
     now = utcnow().timestamp()
+    interrupted=store.db.execute("UPDATE deliveries SET state='uncertain',last_error='InterruptedSend' WHERE state='sending'")
+    uncertain=interrupted.rowcount;store.db.commit()
     rows = store.db.execute("""SELECT q.* FROM deliveries q JOIN editions e ON q.day=e.day
-        WHERE q.state!='sent' AND q.attempts<5 AND q.next_attempt<=? AND e.status='published' AND e.expires_at>?""", (now, now)).fetchall()
+        WHERE q.state IN ('pending','failed') AND q.attempts<5 AND q.next_attempt<=? AND e.status='published' AND e.expires_at>?""", (now, now)).fetchall()
     result = {"sent": 0, "failed": 0, "unconfigured": 0}
+    if uncertain:result['uncertain']=uncertain
     for row in rows:
         channel = row["channel"]
         if not settings.values.get("notifications", {}).get(channel, {}).get("enabled", False):
@@ -99,10 +116,18 @@ def deliver(settings: Settings, store: Store) -> dict:
         if not readiness(channel):
             result["unconfigured"] += 1
             continue
+        store.db.execute("UPDATE deliveries SET state='sending' WHERE day=? AND channel=?",(row['day'],channel))
+        store.db.commit()
+        def checkpoint(part):
+            store.db.execute('UPDATE deliveries SET progress=? WHERE day=? AND channel=?',(part,row['day'],channel))
+            store.db.commit()
         try:
-            send(settings, channel, row["day"])
+            send(settings, channel, row["day"],start_part=row['progress'],on_part_sent=checkpoint)
             store.db.execute("UPDATE deliveries SET state='sent',attempts=attempts+1,last_error=NULL WHERE day=? AND channel=?", (row["day"], channel))
             result["sent"] += 1
+        except UncertainDelivery:
+            store.db.execute("UPDATE deliveries SET state='uncertain',attempts=attempts+1,last_error='UncertainDelivery' WHERE day=? AND channel=?",(row['day'],channel))
+            result['uncertain']=result.get('uncertain',0)+1
         except Exception as exc:
             # Provider exception text may contain Bot tokens or URLs: persist type only.
             attempts = row["attempts"] + 1

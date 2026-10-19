@@ -7,12 +7,43 @@ import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .config import ROOT
-from .evidence import validate_selection
+from .evidence import validate_selection, context
 from .model import parse_json
 from .research import source_url, fetch_source
 from .discovery import discover
+
+
+class SearchPlanError(ValueError):
+    def __init__(self, problems):
+        super().__init__('Invalid search plan or missing section: '+', '.join(p['code'] for p in problems))
+        self.problems=problems
+
+
+def plan_problems(queries, sections, mandatory, covered, limit, gap_limit):
+    """Contract diagnostics contain counts and IDs, never model response text."""
+    if not isinstance(queries,list):return [{'code':'queries_not_list'}]
+    problems=[];counts={sid:0 for sid in sections};gap_count=0
+    if len(queries)>limit:problems.append({'code':'total_limit','count':len(queries),'limit':limit})
+    for index,query in enumerate(queries):
+        if not isinstance(query,dict):
+            problems.append({'code':'invalid_entry','index':index});continue
+        sid=query.get('section_id');text=query.get('query')
+        if not isinstance(sid,str) or sid not in sections:
+            problems.append({'code':'unknown_section','index':index});continue
+        if not isinstance(text,str) or not text.strip() or len(text)>220:
+            problems.append({'code':'invalid_query_text','index':index});continue
+        counts[sid]+=1
+        if sid in covered and not sections[sid].get('search',{}).get('queries'):gap_count+=1
+    missing=sorted(sid for sid in mandatory if not counts[sid])
+    if missing:problems.append({'code':'missing_sections','section_ids':missing})
+    for sid,section in sections.items():
+        cap=max(section.get('search',{}).get('query_count',2),len(section.get('search',{}).get('queries',[])))
+        if counts[sid]>cap:problems.append({'code':'section_limit','section_id':sid,'count':counts[sid],'limit':cap})
+    if gap_count>gap_limit:problems.append({'code':'gap_limit','count':gap_count,'limit':gap_limit})
+    return problems
 
 
 def search(settings, queries: list[dict], work: Path, window: dict | None = None) -> list[dict]:
@@ -58,7 +89,8 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
         if fixed:
             substitutions={'date':window['date'],'window_start':window['window_start'][:10], 'window_end':window['window_end'][:10]}
             queries.extend({'section_id':section['id'],'query':q.format(**substitutions)} for q in fixed)
-        else:planned.append({k:v for k,v in section.items() if k!='sources'})
+        else:planned.append({**{k:v for k,v in section.items() if k!='sources'},
+                            'search':{**section.get('search',{}),'query_count':section.get('search',{}).get('query_count',2)}})
     if planned and (mandatory or gap_limit):
         coverage=[]
         for section in planned:
@@ -69,16 +101,24 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
                 'source_urls':[r.get('index_url','') for r in rows if r.get('engines_ok')],
                 'failed_sources':[r.get('index_url','') for r in rows if not r.get('engines_ok')],
                 'recent_links':sum(len(r['sources']) for r in rows),'titles':titles[:8]})
-        plan=client.request('plan',{'window':window,'sections':planned,'query_limit':max(0,limit-len(queries)),
+        query_limit=min(max(0,limit-len(queries)),sum(s['search']['query_count'] for s in planned))
+        payload={'window':window,'sections':planned,'query_limit':query_limit,
             'strategy':'source_first','source_coverage':coverage,'mandatory_section_ids':sorted(mandatory),
-            'max_gap_queries':gap_limit})
-        queries.extend(plan['queries'])
-    if (not isinstance(queries,list) or len(queries)>limit or any(q.get('section_id') not in section_ids
-        or not isinstance(q.get('query'),str) or not 1<=len(q['query'])<=220 for q in queries)
-        or not mandatory<={q['section_id'] for q in queries}
-        or any(sum(q['section_id']==s['id'] for q in queries)>max(s.get('search',{}).get('query_count',2),len(s.get('search',{}).get('queries',[]))) for s in settings.sections)
-        or sum(q['section_id'] in covered and not sections_by_id[q['section_id']].get('search',{}).get('queries') for q in queries)>gap_limit):
-        raise ValueError('Invalid search plan or missing section')
+            'max_gap_queries':min(gap_limit,query_limit),
+            'section_query_limits':{s['id']:s['search']['query_count'] for s in planned}}
+        for attempt in range(2):
+            plan=client.request('plan',payload)
+            proposed=plan.get('queries')
+            errors=plan_problems(queries+proposed if isinstance(proposed,list) else proposed,
+                                 sections_by_id,mandatory,covered,limit,gap_limit)
+            if diagnostics is not None:
+                diagnostics.setdefault('search_plan_checks',[]).append({'attempt':attempt+1,'problems':errors})
+            if not errors:
+                queries.extend(proposed);break
+            payload={**payload,'validation_errors':errors}
+        else:raise SearchPlanError(errors)
+    errors=plan_problems(queries,sections_by_id,mandatory,covered,limit,gap_limit)
+    if errors:raise SearchPlanError(errors)
     search_results=search(settings,queries,work,window) if queries else []
     results=indexes+search_results
     # Round-robin across publishers before applying a per-section model-input cap.
@@ -123,8 +163,53 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
     # Give every candidate a first original before spending the budget on corroboration.
     selected=list(dict.fromkeys(c['source_ids'][i] for i in range(3) for c in candidates
                                 if i<len(c['source_ids'])))[:cap]
+    empty_selection_probe=not candidates
+    if empty_selection_probe:
+        # An empty preview selection is not a fetch failure. Check real articles from
+        # distinct publishers before accepting an empty issue, within the existing budget.
+        publishers={}
+        for sid,preview in previews.items():publishers.setdefault(urlsplit(preview['url']).hostname,sid)
+        selected=list(publishers.values())[:min(3,cap)]
     sources=[{**s,'id':url_ids[source_url(s['url'])]} for s in fetch(settings,[previews[sid] for sid in selected],work,cache)]
     available={s['id'] for s in sources}
+    recovery=[]
+    remaining_gap=max(0,gap_limit-sum(q['section_id'] in covered for q in queries))
+    for candidate in candidates:
+        if any(sid in available for sid in candidate['source_ids']):continue
+        if not remaining_gap or len(selected)>=cap:break
+        remaining_gap-=1
+        query=' '.join(candidate['entities']+[str(candidate.get('focus') or candidate['event_key'])])[:220]
+        attempt={'section_id':candidate['section_id'],'event_key':candidate['event_key'],'fetched_sources':0}
+        recovery.append(attempt)
+        try:
+            alternatives=search(settings,[{'section_id':candidate['section_id'],'query':query}],work,window)
+            extra=[]
+            for result in alternatives:
+                for item in result['sources']:
+                    try:url=source_url(item['url'])
+                    except (KeyError,ValueError):continue
+                    sid=url_ids.get(url)
+                    if sid in selected or sid in extra:continue
+                    if sid is None:
+                        sid='s'+str(len(url_ids)+1);url_ids[url]=sid;all_urls.add(url)
+                        previews[sid]={**item,'id':sid,'url':url,'section_ids':[candidate['section_id']]}
+                    extra.append(sid)
+                    if len(extra)>=min(4,cap-len(selected)):break
+                if len(extra)>=min(4,cap-len(selected)):break
+            selected.extend(extra)
+            recovered=[{**s,'id':url_ids[source_url(s['url'])]}
+                       for s in fetch(settings,[previews[sid] for sid in extra],work,cache)]
+            sources.extend(recovered);available.update(s['id'] for s in recovered)
+            candidate['source_ids'] += [s['id'] for s in recovered]
+            attempt['fetched_sources']=len(recovered)
+        except (ValueError,subprocess.SubprocessError) as exc:attempt['error']=type(exc).__name__
+    if empty_selection_probe and sources:
+        selection=client.request('select',{'window':window,
+            'sections':[{k:v for k,v in s.items() if k!='sources'} for s in settings.sections],
+            'sources':[{**s,'content':context(s['content'],[])} for s in sources],
+            'material_kind':'fetched originals; recheck the empty preview selection against actual article evidence',
+            'candidate_limit':candidate_limit,'max_sources_per_candidate':3})
+        candidates=validate_selection(selection,settings,sources,candidate_limit)
     kept=[]
     for candidate in candidates:
         candidate['source_ids']=[s for s in candidate['source_ids'] if s in available]
@@ -134,11 +219,13 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
     for result in results:
         for status in result.get('engine_status',[]):
             key=status['engine']+':'+status['status'];engine_status[key]=engine_status.get(key,0)+1
-    metrics={'collection_strategy':'source_first','plugin_queries':len(queries),
+    metrics={'collection_strategy':'source_first','plugin_queries':len(queries)+len(recovery),
              'search_engines_ok':sum(r['engines_ok'] for r in search_results),
              'source_covered_sections':sorted(covered),'search_gap_queries':sum(q['section_id'] in covered for q in queries),
              'preview_urls_omitted':len(all_urls)-len(previews),
              'result_urls':len(previews),'fetched_sources':len(sources),'selected_candidates':len(candidates),
+             'empty_selection_probe':empty_selection_probe,
+             'source_recovery':recovery,
              'candidates_with_originals':len(kept),'engine_status':engine_status,**discovery_metrics,
              'queries':queries,
              'candidate_fetches':[{'event_key':c['event_key'],'section_id':c['section_id'],

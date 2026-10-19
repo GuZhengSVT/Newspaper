@@ -6,6 +6,7 @@ import json
 
 from .storage import expiry, utcnow
 from .notify import readiness, send_text, UncertainDelivery
+from .messages import news_message
 
 
 def prepare_batches(settings, store, jobs: list) -> list[str]:
@@ -41,15 +42,11 @@ def finish_batches(settings, store, batch_ids: list[str]) -> dict:
     return deliver_batches(settings,store)
 
 
-def batch_message(settings, store, batch) -> tuple[str,str]:
+def batch_message(settings, store, batch) -> tuple[str,dict]:
     label={'daily':'日报','weekly':'周报','monthly':'月报','interval':'定期新闻'}[batch['period']]
     subject=settings.values.get('project',{}).get('name','Newspaper')+' · '+label+' · '+batch['window_end'][:10]
-    lines=[subject+' 已更新。','报道时段：'+batch['window_start']+' — '+batch['window_end'],'']
-    for key in json.loads(batch['expected']):
-        doc=store.document(key)
-        lines += [doc['title'],'阅读：'+settings.base_url+'/daily/'+key+'/',
-                  'Markdown：'+settings.base_url+'/downloads/'+key+'.md','']
-    return subject,'\n'.join(lines)
+    message=news_message(settings,[(key,store.document(key)) for key in json.loads(batch['expected'])],subject)
+    return subject,message
 
 
 def deliver_batches(settings, store) -> dict:
@@ -66,11 +63,16 @@ def deliver_batches(settings, store) -> dict:
         if not readiness(channel):result['unconfigured']+=1;continue
         batch=store.db.execute('select * from notification_batches where id=?',(row['batch_id'],)).fetchone()
         if not all(store.published(key) for key in json.loads(batch['expected'])):continue
-        subject,text=batch_message(settings,store,batch)
+        subject,message=batch_message(settings,store,batch)
         store.db.execute("update notification_outbox set state='sending',attempts=attempts+1 where batch_id=? and channel=?",(row['batch_id'],channel))
         store.db.commit()
+        def checkpoint(part):
+            store.db.execute('update notification_outbox set progress=? where batch_id=? and channel=?',
+                             (part,row['batch_id'],channel))
+            store.db.commit()
         try:
-            send_text(settings,channel,subject,text,row['batch_id'])
+            send_text(settings,channel,subject,message['text'],row['batch_id'],html_text=message['html'],
+                      telegram_parts=message['telegram'],start_part=row['progress'],on_part_sent=checkpoint)
             state='sent';error=None;result['sent']+=1
         except UncertainDelivery:
             state='uncertain';error='UncertainDelivery';result['uncertain']+=1

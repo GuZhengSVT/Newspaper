@@ -66,7 +66,7 @@ def latest_window(now: datetime, cfg: dict, timezone: str) -> dict | None:
     return {'date':end.date().isoformat(), 'window_start':previous_slot(end,cfg).isoformat(), 'window_end':end.isoformat()}
 
 
-def jobs(settings, now: datetime) -> list[tuple[dict,dict]]:
+def jobs(settings, now: datetime, manual: bool = False) -> list[tuple[dict,dict]]:
     default = settings.values.get('schedule', {})
     timezone = settings.values.get('project', {}).get('timezone', 'UTC')
     result=[]
@@ -80,7 +80,11 @@ def jobs(settings, now: datetime) -> list[tuple[dict,dict]]:
             signature=json.dumps([task_identity(cfg,timezone),notify], sort_keys=True)
             batches.setdefault(signature, (cfg, [], notify))[1].append(section)
         for cfg, sections, notify in batches.values():
-            window=latest_window(now,cfg,timezone)
+            if manual:
+                end=now.astimezone(ZoneInfo(timezone)).replace(microsecond=0)
+                window={'date':end.date().isoformat(),'window_start':previous_slot(end,cfg).isoformat(),
+                        'window_end':end.isoformat()}
+            else:window=latest_window(now,cfg,timezone)
             if window is None:continue
             ids=[s['id'] for s in sections]
             if task_identity(cfg,timezone) == task_identity(group_schedule,timezone) and notify==group.get('notify',True):slug=group['id']
@@ -93,5 +97,10 @@ def jobs(settings, now: datetime) -> list[tuple[dict,dict]]:
                 raise ValueError('Scheduled publication id collides with a group id')
             job={**group,'id':slug,'sections':ids,'schedule':cfg,'group_id':group['id'],'notify':notify,'task_id':task_identity(cfg,timezone)}
             if slug != group['id']:job['name']=group['name']+' · '+' / '.join(s['name'] for s in sections)
+            if manual:
+                suffix='-manual-'+end.strftime('%H%M%S')
+                base=slug if len(slug+suffix)<=40 else slug[:16]+'-'+hashlib.sha256(slug.encode()).hexdigest()[:8]
+                job['id']=base+suffix
+                job['name']+=' · 手动刊'
             result.append((job,window))
     return result

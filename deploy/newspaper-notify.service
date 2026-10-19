@@ -12,7 +12,7 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=NEWSPAPER_CONFIG=/etc/newspaper/config.toml
 EnvironmentFile=/etc/newspaper/credentials.env
 ExecStart=/opt/Newspaper/.venv/bin/python -m newspaper.cli notify
-TimeoutStartSec=2min
+TimeoutStartSec=10min
 SuccessExitStatus=75
 MemoryMax=128M
 UMask=0027

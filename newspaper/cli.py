@@ -23,10 +23,13 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run")
     run.add_argument("--no-notify", action="store_true", help="Publish a preview without enqueueing email or Telegram")
+    run.add_argument('--manual',action='store_true',help='Run enabled schedules immediately, with separate manual publication IDs')
+    run.add_argument('--task',help='Run only the task ID printed by schedule')
     run.add_argument("--cutoff", type=datetime.fromisoformat,
                      help="Explicit timezone-aware cutoff for today's issue; defaults to noon")
     for cmd in [ "build", "clean", "notify", "status", "doctor", "schedule", "check-config"]:
-        commands.add_parser(cmd)
+        command_parser=commands.add_parser(cmd)
+        if cmd=='schedule':command_parser.add_argument('--manual',action='store_true',help='List all enabled tasks, including future schedules')
     legacy = commands.add_parser("import-legacy")
     legacy.add_argument("directory", type=Path)
     args = parser.parse_args()
@@ -37,7 +40,7 @@ def main() -> int:
             from .storage import utcnow
             result={'valid':True,'groups':len(settings.editions),'sections':len(settings.sections)}
             if args.command=='schedule':
-                scheduled=jobs(settings,utcnow());tasks={}
+                scheduled=jobs(settings,utcnow(),manual=True) if args.manual else jobs(settings,utcnow());tasks={}
                 result['jobs']=[{'id':e['id'],'task_id':e['task_id'],'name':e['name'],'sections':e['sections'],
                     'schedule':e['schedule'],'notify':e['notify'],**w} for e,w in scheduled]
                 for job,window in scheduled:
@@ -59,7 +62,8 @@ def main() -> int:
             store = Store(settings)
             try:
                 if args.command == "run":
-                    result = generate(settings, store, notify=not args.no_notify, cutoff=args.cutoff)
+                    result = generate(settings, store, notify=not args.no_notify, cutoff=args.cutoff,
+                                      manual=args.manual,task_id=args.task)
                 elif args.command == "build":
                     result = build(settings, store)
                 elif args.command == "clean":

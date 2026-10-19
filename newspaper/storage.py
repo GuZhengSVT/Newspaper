@@ -121,6 +121,10 @@ class Store:
             self.db.execute("ALTER TABLE events ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
         if "metrics" not in {r[1] for r in self.db.execute("PRAGMA table_info(runs)")}:
             self.db.execute("ALTER TABLE runs ADD COLUMN metrics TEXT NOT NULL DEFAULT '{}'")
+        if 'progress' not in {r[1] for r in self.db.execute('PRAGMA table_info(notification_outbox)')}:
+            self.db.execute('ALTER TABLE notification_outbox ADD COLUMN progress INTEGER NOT NULL DEFAULT 0')
+        if 'progress' not in {r[1] for r in self.db.execute('PRAGMA table_info(deliveries)')}:
+            self.db.execute('ALTER TABLE deliveries ADD COLUMN progress INTEGER NOT NULL DEFAULT 0')
         self.db.commit()
 
     def close(self) -> None:

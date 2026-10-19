@@ -11,10 +11,10 @@ from pathlib import Path
 from jsonschema import ValidationError
 
 from .config import TZ, Settings
-from .bounded import research as bounded_research, supplement as bounded_supplement
+from .bounded import research as bounded_research, supplement as bounded_supplement, SearchPlanError
 from .model import Model
 from .style import style_issues, compact_articles
-from .evidence import selected_sources, used_evidence, validate_selection
+from .evidence import selected_sources, used_evidence, validate_selection, context
 from .notify import deliver, enqueue
 from .publish import build, markdown
 from .research import gather
@@ -23,7 +23,8 @@ from .storage import Store, atomic_json, utcnow
 from .validation import SCHEMA, validate_report, normalize
 
 
-def generate(settings: Settings, store: Store, notify: bool = True, cutoff: datetime | None = None) -> dict:
+def generate(settings: Settings, store: Store, notify: bool = True, cutoff: datetime | None = None,
+             *, manual: bool = False, task_id: str | None = None) -> dict:
     """Both editions share a bounded in-run source cache; publications are independent."""
     if cutoff is not None:
         now = utcnow().astimezone(settings.timezone)
@@ -38,7 +39,10 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
     if settings.values.get('project') or 'schedule' in settings.values:
         from .schedule import jobs
         from .batches import prepare_batches, finish_batches
-        results=[];cache={};scheduled=jobs(settings, utcnow())
+        results=[];cache={};scheduled=jobs(settings, cutoff or utcnow(),manual=True) if manual else jobs(settings,utcnow())
+        if task_id:
+            scheduled=[(e,w) for e,w in scheduled if e['task_id']==task_id]
+            if not scheduled:raise ValueError('Task is unknown or not due; use --manual to run before its scheduled date')
         if cutoff is not None:
             scheduled=[(e,{**w,'window_end':cutoff.isoformat()} if w['date']==cutoff.date().isoformat() else w) for e,w in scheduled]
         batch_ids=prepare_batches(settings, store, scheduled) if notify else []
@@ -130,7 +134,8 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 if not sources:
                     raise ValueError('No originals verified; refusing a no-news success')
                 history = store.related_history(candidates,task_id=edition.get("task_id"))
-                contexts = selected_sources(sources, candidates)
+                contexts = (selected_sources(sources, candidates) if candidates else
+                            [{**s,'content':context(s['content'],[])} for s in sources])
             else:
                 # Batches are explicitly configured related topics, never an arbitrary single mega-query.
                 batches = {}
@@ -192,6 +197,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 # Normalize before model review so offset spelling cannot reject news.
                 for section in doc['sections']:
                     for article in section['articles']:
+                        article.pop('image',None)  # Only the optional source-bound illustration stage may add images.
                         try:
                             moment = datetime.fromisoformat(article['published_at'])
                             if moment.tzinfo is not None:article['published_at'] = moment.astimezone(TZ).isoformat()
@@ -271,9 +277,24 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         continue
                     raise
                 evidence = used_evidence(doc, contexts)
-                review = client.request("review", {"window": window, "sections": settings.sections,
-                    "report": doc, "sources": evidence, "history": history, "candidates": candidates,
-                    "collection_status": {"any_original_fetched": bool(sources), "coverage_notes": coverage}})
+                draft_keys={a['event_key'] for s in doc['sections'] for a in s['articles']}
+                if not draft_keys:evidence=contexts
+                review_payload={"window": window, "sections": settings.sections,
+                    "report": doc, "sources": evidence, "history": history,
+                    "candidates": [c for c in candidates if c['event_key'] in draft_keys],
+                    "expected_event_keys": sorted(draft_keys),
+                    "collection_status": {"any_original_fetched": bool(sources), "coverage_notes": coverage}}
+                for contract_attempt in range(2):
+                    review=client.request('review',review_payload)
+                    if not edition['id']:break
+                    try:keep_approved(doc,review)
+                    except ValueError:
+                        if contract_attempt:raise
+                        metrics['review_contract_retries']=metrics.get('review_contract_retries',0)+1
+                        review_payload={**review_payload,'validation_error':
+                            'article_reviews must cover expected_event_keys exactly once; an empty report requires article_reviews=[]'}
+                        continue
+                    break
                 metrics.setdefault("reviews", []).append({"attempt": attempt + 1,"ok": review.get("ok"),
                     "problems": [str(p)[:200] for p in review.get('problems', [])[:5]],
                     "research_queries": len(review.get('research_queries', [])),
@@ -333,6 +354,9 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                         contexts = selected_sources(list({s["id"]: s for s in sources}.values()), candidates) if edition["id"] else sources
             else:
                 raise ValueError('Report exhausted bounded validation and review retries')
+            from .images import illustrate
+            illustrate(doc, contexts, client)
+            validate_report(doc, settings, contexts, history, window)
             directory = settings.data / "editions" / key
             directory.mkdir(parents=True, exist_ok=True)
             atomic_json(directory / "report.json", doc)
@@ -358,6 +382,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 result["notifications"] = deliver(settings, store)
             return result
     except BaseException as exc:
+        if isinstance(exc,SearchPlanError):metrics['search_plan_errors']=exc.problems
         store.db.execute("UPDATE runs SET status='failed',finished_at=?,error=? WHERE id=?",
                          (utcnow().timestamp(), type(exc).__name__, run_id))
         store.db.commit()
@@ -438,6 +463,7 @@ def keep_approved(doc: dict, review: dict) -> dict:
     expected = {a["event_key"] for s in doc["sections"] for a in s["articles"]}
     verdicts = review.get("article_reviews", [])
     if (not isinstance(verdicts, list) or len(verdicts) != len(expected)
+        or any(not isinstance(r,dict) or not isinstance(r.get('event_key'),str) for r in verdicts)
         or {r.get("event_key") for r in verdicts} != expected
         or any(not isinstance(r.get("ok"), bool) or not isinstance(r.get("problems"), list) for r in verdicts)):
         raise ValueError("Final review did not cover every article")

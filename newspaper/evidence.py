@@ -20,6 +20,10 @@ def context(text: str, terms: list[str], limit: int = 6500) -> str:
             merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
         else:
             merged.append((start, end))
+    # Cross-language entity names may not match the source, or may match only its header.
+    # Use the available lead budget instead of cutting an otherwise complete abstract at 2200.
+    if len(merged)==1 and merged[0][0]==0:
+        return text[:limit]
     return "\n[…]\n".join(text[a:b] for a, b in merged)[:limit]
 
 

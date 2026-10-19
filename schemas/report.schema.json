@@ -265,6 +265,47 @@
         "limitations": {
           "type": "string",
           "maxLength": 1800
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "caption",
+            "source_id",
+            "source_url",
+            "width",
+            "height"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "pattern": "^https://[^<>\\s\"]+$",
+              "maxLength": 2000
+            },
+            "caption": {
+              "type": "string",
+              "minLength": 4,
+              "maxLength": 250
+            },
+            "source_id": {
+              "type": "string"
+            },
+            "source_url": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 450,
+              "maximum": 10000
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 450,
+              "maximum": 10000
+            }
+          }
         }
       }
     }

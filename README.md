@@ -37,6 +37,8 @@ export NEWSPAPER_WEB=/tmp/newspaper-web
 
 `check-config`, `schedule` and `doctor` make no model, search or notification requests. `schedule` shows the latest due reporting windows and the publications belonging to each delivery task. Empty enabled topics pause generation. `run --no-notify` is a real publication, skipped on subsequent runs; it is not later announced automatically.
 
+For an immediate end-to-end run, list all enabled delivery tasks with `schedule --manual`, then invoke `run --manual --task TASK_ID` one task at a time. Each command uses the existing retrieval, editing, verification, publication and notification pipeline. Manual issues have separate publication IDs and look back one configured period from the invocation time, without changing normal schedules or start dates. An explicit timezone-aware `--cutoff` can give multiple manual runs the same cutoff earlier that day.
+
 ## Three configuration files
 
 | File | Purpose | Publish to Git? |
@@ -62,6 +64,10 @@ Each section independently supports:
 - `discovery`: `max_indexes_per_edition` (1–128), `max_links_per_index` (1–30), `max_previews_per_section` (1–60, applied round-robin across publishers so an early source cannot crowd out the rest) and `max_gap_queries` (0–40, the total top-up search budget for sections that already have source coverage).
 
 Collection reads every enabled configured source **before** searching, then hands those results and their headlines to the planner so search only fills gaps. A section with no fixed queries must issue at least one search when no configured source produced an item inside the window; a section whose sources did produce items may skip search entirely. Only a source that actually yielded in-window items counts as covered, so a feed that was read successfully but had no update in the last 24 hours is still a gap.
+
+Planning receives explicit per-section limits and a feasible total budget. Invalid plans receive one correction attempt with structured constraint feedback; repeated violations stop the run and retain diagnostic counts, without storing response bodies. An empty preview selection triggers original-article checks from up to three distinct publishers within the existing fetch budget, followed by selection and empty-issue review. Failed original fetches still cannot produce a successful empty publication. When entity terms do not match a source language, or match only its header, evidence packing uses the available lead budget rather than cutting an otherwise complete abstract at the short lead boundary.
+
+Unreadable candidate originals trigger a search for alternative evidence about the same event, bounded by remaining gap-query and fetch budgets. Alternative sources still require the normal timestamp, quotation and semantic checks. Final reviews cover only current draft articles; filtered candidates cannot reappear as review verdicts. A mismatched verdict list receives one contract-correction attempt, and empty drafts are reviewed against fetched source contexts.
 
 Exceeding the source or discovery budget fails rather than silently omitting sources or sections. Discovered links and search results share the source fetch budget. All selected articles still need original evidence, timestamps within the reporting window and final review.
 
@@ -90,7 +96,9 @@ A Monday 09:00 weekly report starts generation at that time and covers the prece
 
 A persistent batch records every expected publication before generation. It waits for all of them, including recovery after partial failure or restart. Successful channels are never resent. Known delivery failures retry only that channel, up to five attempts with backoff. If the provider may have accepted a message but acknowledgement is lost, the outbox becomes `uncertain` and is not automatically retried; inspect `status` and the provider before taking manual action. Telegram cannot offer an absolute exactly-once guarantee. Previously published previews/imported issues are not automatically announced.
 
-Enable email/Telegram in runtime configuration. Credential variable names are in [.env.example](.env.example). SMTP uses an existing provider with STARTTLS or implicit TLS. Messages contain reading/download links rather than full articles. `notify = false` excludes a group or section from delivery while retaining web publication.
+Enable email/Telegram in runtime configuration. Credential variable names are in [.env.example](.env.example). SMTP uses an existing provider with STARTTLS or implicit TLS. Notifications contain the complete published news text and source references, with webpage links at the end. Email includes responsive HTML and plain-text alternatives. Telegram uses escaped HTML, splits long text at paragraph boundaries within its [message limits](https://core.telegram.org/bots/api#sendmessage), and checkpoints acknowledged parts so a definite failure resumes without repeating them. Photos are separate, optional messages; rejected image URLs do not prevent text delivery. `notify = false` excludes a group or section from delivery while retaining web publication.
+
+Each article may include one externally hosted image in HTML, Markdown, email and Telegram. Candidates must be embedded in a cited source page with an informative publisher description. A separate editorial pass selects only images depicting the same subject and event; uncertain matches are omitted. The verifier checks public HTTPS redirects, download limits, successful decoding, dimensions, aspect ratio and image detail. Logos, advertisements, thumbnails and blank or strongly blurred placeholders are excluded. Captions preserve illustration/archive qualifiers and link to the source. Optional image failures leave verified text intact; binary images are not retained. The `batch` section field only groups topics in the alternative collection path; bounded retrieval and notification grouping do not use it.
 
 ## Homepage and feeds
 

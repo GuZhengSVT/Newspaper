@@ -202,9 +202,11 @@ def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None
             published = feed_stamp
             basis = '发布者 RSS 发布时间（' + feed_url + '）'
         if published:text = basis + ': ' + published + '\n' + text
+        from .images import source_images
         return {"id": "s-" + hashlib.sha256(url.encode()).hexdigest()[:16], "url": url,
                 "title": str(candidate.get("title", ""))[:300],
-                "published_at": published, "search_published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat()}
+                "published_at": published, "search_published_at": candidate.get("published_at"), "content": text, "fetched_at": utcnow().isoformat(),
+                "images": source_images(data['content'],data['kind'],url)}
     except (ValueError, KeyError, subprocess.SubprocessError):
         return None
 

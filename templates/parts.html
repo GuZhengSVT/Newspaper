@@ -22,14 +22,23 @@
   <details id="contents-panel" open>
     <summary>目录</summary>
     <nav aria-label="文章目录导航">
+    <ul class="toc-list">
     {% for group in groups %}
-      <a class="toc-edition" href="#{{ group.anchor }}">{{ group.label }}</a>
-      {% for section in group.sections %}
-      <a class="toc-section" href="#{{ section.anchor }}">{{ section.name }}</a>
-      {% if section.issue_url %}<p class="story-meta">更新于 {{ section.issue_date }} · <a href="{{ section.issue_url }}">本期</a></p>{% endif %}
-  {% for article in section.articles %}<a class="toc-article" href="#{{ article.anchor }}">{{ article.title }}</a>{% endfor %}
-      {% endfor %}
+      <li>
+        <a class="toc-edition" href="#{{ group.anchor }}">{{ group.label }}</a>
+        <ul>
+        {% for section in group.sections %}
+          <li>
+            <a class="toc-section" href="#{{ section.anchor }}">{{ section.name }}</a>
+            <ul>
+            {% for article in section.articles %}<li><a class="toc-article" href="#{{ article.anchor }}">{{ article.title }}</a></li>{% endfor %}
+            </ul>
+          </li>
+        {% endfor %}
+        </ul>
+      </li>
     {% endfor %}
+    </ul>
     </nav>
   </details>
 </aside>

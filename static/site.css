@@ -55,10 +55,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visibl
 .contents nav { display: flex; flex-direction: column; border-left: 1px solid var(--line); }
 .contents a { display: block; padding: 4px 10px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; border-left: 2px solid transparent; margin-left: -1px; }
 .contents a[aria-current="location"] { color: var(--ink); border-left-color: var(--accent); }
-.contents .toc-edition { color: var(--ink); font-weight: 600; margin-top: 12px; }
-.contents .toc-edition:first-child { margin-top: 0; }
+.toc-list, .toc-list ul { list-style: none; margin: 0; padding: 0; }
+.toc-list ul { padding-left: 10px; }
+.toc-list > li + li { margin-top: 12px; }
+.contents .toc-edition { color: var(--ink); font-weight: 600; }
 .contents .toc-section { margin-top: 7px; }
-.contents .toc-article { padding-left: 18px; font-size: 13px; }
+.contents .toc-article { font-size: 13px; }
 .news-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 36px; min-width: 0; }
 .news-column, .reader-content, .story { min-width: 0; }
 .column-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 12px; margin-bottom: 22px; border-bottom: 2px solid var(--line); }

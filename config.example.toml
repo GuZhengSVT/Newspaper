@@ -1,0 +1,34 @@
+# Copy to /etc/newspaper/config.toml; this file contains no secrets.
+data_dir = "/var/lib/newspaper"
+web_dir = "/srv/newspaper"
+base_url = "http://127.0.0.1"
+retention_days = 30
+
+[model]
+provider = "d1api"
+id = "deepseek-v4.1-flash"
+base_url = "https://d1api.xin/v1"
+api_key_env = "D1API_API_KEY"
+timeout_seconds = 180
+max_tokens = 12000
+
+[search]
+engines = ["ddg", "bing", "exa"]
+queries_per_section = 3
+max_sources_per_section = 8
+timeout_seconds = 35
+
+[notifications.email]
+enabled = false
+
+[notifications.telegram]
+enabled = false
+
+# No editorial sections are preselected. An empty list pauses generation only;
+# the website, retention cleanup and delivery retry services keep working.
+# [[sections]]
+# id = "your-section-id"
+# name = "Your section name"
+# scope = "Editorial scope and exclusions"
+# keywords = ["keyword in Chinese", "keyword in English"]
+# enabled = true

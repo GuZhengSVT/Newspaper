@@ -1,0 +1,21 @@
+name: Offline checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install -r requirements.lock
+      - run: npm ci --omit=dev --ignore-scripts
+      - run: make check test
+      # CI never receives model/push credentials, generates real news or uploads data artifacts.

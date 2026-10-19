@@ -1,0 +1,22 @@
+[Unit]
+Description=Delete expired Newspaper data without backups
+
+[Service]
+Type=oneshot
+User=newspaper
+Group=newspaper
+WorkingDirectory=/opt/Newspaper
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=NEWSPAPER_CONFIG=/etc/newspaper/config.toml
+ExecStart=/opt/Newspaper/.venv/bin/python -m newspaper.cli clean
+TimeoutStartSec=2min
+SuccessExitStatus=75
+MemoryMax=128M
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/newspaper /srv/newspaper
+StandardOutput=null
+StandardError=null

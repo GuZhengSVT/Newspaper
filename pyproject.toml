@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "newspaper-daily"
+version = "0.1.0"
+description = "A self-hosted, evidence-based daily newspaper with Markdown, a static website and notifications."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["httpx>=0.28,<1", "Jinja2>=3.1,<4", "jsonschema>=4.23,<5", "markdown-it-py>=3,<5"]
+
+[project.scripts]
+newspaper = "newspaper.cli:main"
+
+[tool.setuptools]
+packages = ["newspaper"]

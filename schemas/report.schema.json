@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Newspaper report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "date", "title", "summary", "highlights", "window_start", "window_end", "generated_at", "sections", "sources"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "date": {"type": "string", "format": "date"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 160},
+    "summary": {"type": "string", "maxLength": 800},
+    "highlights": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 300}},
+    "window_start": {"type": "string", "format": "date-time"},
+    "window_end": {"type": "string", "format": "date-time"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "sections": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "empty_reason", "articles"],
+      "properties": {
+        "id": {"type": "string"}, "name": {"type": "string"},
+        "empty_reason": {"type": "string"},
+        "articles": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/article"}}
+      }
+    }}
+  },
+  "$defs": {
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "url", "title", "published_at"],
+      "properties": {
+        "id": {"type": "string"}, "url": {"type": "string", "pattern": "^https://"},
+        "title": {"type": "string"}, "published_at": {"type": ["string", "null"]}
+      }
+    },
+    "article": {
+      "type": "object", "additionalProperties": false,
+      "required": ["event_key", "title", "summary", "published_at", "follow_up", "new_facts", "verification", "facts"],
+      "properties": {
+        "event_key": {"type": "string", "minLength": 3, "maxLength": 200},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "summary": {"type": "string", "maxLength": 500},
+        "published_at": {"type": "string", "format": "date-time"},
+        "follow_up": {"type": "boolean"}, "new_facts": {"type": "string", "maxLength": 1000},
+        "verification": {"enum": ["official_statement", "single_source", "corroborated"]},
+        "facts": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+          "type": "object", "additionalProperties": false, "required": ["text", "evidence"],
+          "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "evidence": {"type": "array", "minItems": 1, "maxItems": 5, "items": {
+              "type": "object", "additionalProperties": false, "required": ["source_id", "quote"],
+              "properties": {"source_id": {"type": "string"}, "quote": {"type": "string", "minLength": 8, "maxLength": 600}}
+            }}
+          }
+        }}
+      }
+    }
+  }
+}

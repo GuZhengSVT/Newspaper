@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}{{ doc.title }} · Newspaper{% endblock %}
+{% block body %}
+<article class="report"><a class="back" href="/">← 日报归档</a><p class="eyebrow">{{ doc.date }}{% if legacy_html %} · 历史格式{% endif %}</p><h1>{{ doc.title }}</h1>
+<div class="report-actions"><a href="/downloads/{{ doc.date }}.md" download>下载 Markdown</a><a href="/downloads/{{ doc.date }}.json" download>下载 JSON</a></div>
+{% if legacy_html %}<div class="prose legacy">{{ legacy_html }}</div>{% else %}
+<p class="lead">{{ doc.summary }}</p><p class="metadata">报道窗口 {{ doc.window_start }} — {{ doc.window_end }}<br>生成时间 {{ doc.generated_at }}</p>
+<nav class="toc" aria-label="本期目录">{% for section in doc.sections %}<a href="#section-{{ loop.index }}">{{ section.name }}</a>{% endfor %}</nav>
+{% if doc.highlights %}<section class="highlights"><h2>今日重点</h2><ul>{% for item in doc.highlights %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+{% for section in doc.sections %}<section class="news-section" id="section-{{ loop.index }}"><h2>{{ section.name }}</h2>{% if not section.articles %}<p class="muted">{{ section.empty_reason }}</p>{% endif %}{% for article in section.articles %}<article class="story"><p class="metadata">{{ article.published_at }} · {{ labels[article.verification] }}{% if article.follow_up %} · 跟进{% endif %}</p><h3>{{ article.title }}</h3><p>{{ article.summary }}</p>{% if article.new_facts %}<p><strong>新增进展：</strong>{{ article.new_facts }}</p>{% endif %}<ul>{% for fact in article.facts %}<li>{{ fact.text }}<span class="citations">{% for evidence in fact.evidence %}<a href="{{ sources[evidence.source_id].url }}" target="_blank" rel="noopener noreferrer">[{{ sources[evidence.source_id].title }}]</a>{% endfor %}</span></li>{% endfor %}</ul></article>{% endfor %}</section>{% endfor %}
+<section class="sources"><h2>来源清单</h2><ol>{% for source in doc.sources %}<li><a href="{{ source.url }}" target="_blank" rel="noopener noreferrer">{{ source.title }}</a></li>{% endfor %}</ol></section>
+{% endif %}</article>
+{% endblock %}

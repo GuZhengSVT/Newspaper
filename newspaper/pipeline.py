@@ -45,6 +45,9 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
             if not scheduled:raise ValueError('Task is unknown or not due; use --manual to run before its scheduled date')
         if cutoff is not None:
             scheduled=[(e,{**w,'window_end':cutoff.isoformat()} if w['date']==cutoff.date().isoformat() else w) for e,w in scheduled]
+        if not manual:
+            scheduled=[({**e,'id':key.split('/',1)[1]} if (key:=store.existing_publication(e,w)) else e,w)
+                       for e,w in scheduled]
         batch_ids=prepare_batches(settings, store, scheduled) if notify else []
         for edition, window in scheduled:
             key=window['date']+'/'+edition['id']

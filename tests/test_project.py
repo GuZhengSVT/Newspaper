@@ -225,6 +225,52 @@ class ProjectTests(unittest.TestCase):
         for member in scheduled:self.save(*member)
         self.assertEqual(prepare_batches(settings,self.store,scheduled),[])
 
+    def test_group_rename_reuses_published_slot_without_regeneration_or_resending(self):
+        settings=self.make_settings();self.store.settings=settings
+        scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
+        for member in scheduled:self.save(*member)
+        with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text'):
+            finish_batches(settings,self.store,ids)
+        settings.values['editions'][0].update(id='renamed',name='Renamed group')
+        with patch('newspaper.pipeline.utcnow',return_value=self.now),patch('newspaper.pipeline.Model.request') as model, \
+             patch('newspaper.batches.send_text') as send:
+            result=generate(settings,self.store)
+        self.assertEqual(result['state'],'idle');model.assert_not_called();send.assert_not_called()
+        self.assertEqual(result['editions'][0]['edition'],'first')
+        self.assertFalse(self.store.published(self.day+'/renamed'))
+
+    def test_publication_reuse_requires_the_same_sections_and_reporting_window(self):
+        settings=self.make_settings();job,window=jobs(settings,self.now)[0];self.save(job,window)
+        renamed={**job,'id':'renamed'}
+        self.assertEqual(self.store.existing_publication(renamed,window),self.day+'/first')
+        self.assertIsNone(self.store.existing_publication({**renamed,'sections':['other']},window))
+        self.assertIsNone(self.store.existing_publication(renamed,{**window,'window_end':self.now.isoformat()}))
+
+    def test_waiting_batch_tracks_current_members_instead_of_removed_publication_ids(self):
+        settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
+        settings.values['editions'][0]['id']='renamed'
+        scheduled=jobs(settings,self.now)
+        self.assertEqual(prepare_batches(settings,self.store,scheduled),ids)
+        for member in scheduled:self.save(*member)
+        with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
+            self.assertEqual(finish_batches(settings,self.store,ids)['sent'],2)
+        self.assertTrue(all('/renamed/' in call.args[3] for call in send.call_args_list))
+
+    def test_correction_note_is_durable_in_both_channels_and_never_resent(self):
+        settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
+        for member in scheduled:self.save(*member)
+        note='更正：此前推送为空，请以本次正文为准。'
+        self.store.db.execute('update notification_batches set correction_note=? where id=?',(note,ids[0]));self.store.db.commit()
+        self.store.close();self.store=Store(settings)
+        with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
+            self.assertEqual(finish_batches(settings,self.store,ids)['sent'],2)
+            self.assertEqual(deliver_batches(settings,self.store)['sent'],0)
+        for call in send.call_args_list:
+            self.assertIn('更正',call.args[2]);self.assertIn(note,call.args[3])
+            self.assertIn(note,call.kwargs['html_text'])
+            self.assertIn(note,''.join(p['text'] for p in call.kwargs['telegram_parts']))
+            self.assertIn('离线测试文本',call.args[3])
+
     def test_task_history_does_not_suppress_independent_weekly_or_monthly_reports(self):
         settings=self.make_settings();scheduled=jobs(settings,self.now)
         self.save(*scheduled[0]);task=scheduled[0][0]['task_id']

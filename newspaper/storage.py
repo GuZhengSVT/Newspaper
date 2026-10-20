@@ -125,6 +125,8 @@ class Store:
             self.db.execute('ALTER TABLE notification_outbox ADD COLUMN progress INTEGER NOT NULL DEFAULT 0')
         if 'progress' not in {r[1] for r in self.db.execute('PRAGMA table_info(deliveries)')}:
             self.db.execute('ALTER TABLE deliveries ADD COLUMN progress INTEGER NOT NULL DEFAULT 0')
+        if 'correction_note' not in {r[1] for r in self.db.execute('PRAGMA table_info(notification_batches)')}:
+            self.db.execute("ALTER TABLE notification_batches ADD COLUMN correction_note TEXT NOT NULL DEFAULT ''")
         self.db.commit()
 
     def close(self) -> None:
@@ -161,6 +163,22 @@ class Store:
         if task_id:
             self.db.execute('insert or ignore into publication_tasks(day,task_id) values(?,?)',(day,task_id))
             self.db.commit()
+
+    def existing_publication(self, job: dict, window: dict) -> str | None:
+        """A group rename does not create a new issue for the same sections and slot."""
+        key=window['date']+'/'+job['id']
+        if self.db.execute("select 1 from editions where day=? and status in ('ready','published')",(key,)).fetchone():
+            return key
+        rows=self.db.execute("""select e.day from editions e join publication_tasks t on t.day=e.day
+            where t.task_id=? and e.status in ('ready','published') and e.expires_at>?""",
+            (job['task_id'],utcnow().timestamp())).fetchall()
+        matches=[]
+        for row in rows:
+            doc=self.document(row['day'])
+            if (all(doc.get(k)==window[k] for k in ['date','window_start','window_end'])
+                and {s['id'] for s in doc.get('sections',[])}==set(job['sections'])):
+                matches.append((doc['generated_at'],row['day']))
+        return max(matches)[1] if matches else None
 
     def history(self, task_id: str | None = None) -> list[dict]:
         return [dict(r) for r in self.db.execute(

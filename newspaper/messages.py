@@ -26,7 +26,7 @@ def text_chunks(text: str, limit: int = 3500) -> list[str]:
     return chunks
 
 
-def news_message(settings, documents: list[tuple[str,dict]], subject: str) -> dict:
+def news_message(settings, documents: list[tuple[str,dict]], subject: str, *, notice: str = '') -> dict:
     plain=[];html=['<h1 style="margin:0 0 24px;font-family:Georgia,&#34;Times New Roman&#34;,&#34;Songti SC&#34;,serif;font-size:28px;line-height:1.4;font-weight:700">'+escape(subject)+'</h1>'];parts=[];pending=[];pending_size=0;links=[]
 
     def flush():
@@ -45,6 +45,8 @@ def news_message(settings, documents: list[tuple[str,dict]], subject: str) -> di
             pending_size += utf16_length(chunk)+2
 
     block(subject,'b')
+    if notice:
+        block(notice);html.append('<p>'+escape(notice)+'</p>')
     for key,doc in documents:
         view=report_view(doc,key,settings)
         block(doc['title'],'b');html.append('<h2>'+escape(doc['title'])+'</h2>')

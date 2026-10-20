@@ -18,7 +18,7 @@ def prepare_batches(settings, store, jobs: list) -> list[str]:
     for (task_id,end), members in tasks.items():
         batch_id='b-'+hashlib.sha256((task_id+'\0'+end).encode()).hexdigest()[:32]
         expected=[w['date']+'/'+job['id'] for job,w in members]
-        existing=store.db.execute('select 1 from notification_batches where id=?',(batch_id,)).fetchone()
+        existing=store.db.execute('select state from notification_batches where id=?',(batch_id,)).fetchone()
         # Never backfill notifications for previously published previews or migrated issues.
         if not existing and (not channels or all(store.published(key) for key in expected)):continue
         if not existing:
@@ -26,6 +26,9 @@ def prepare_batches(settings, store, jobs: list) -> list[str]:
             store.db.execute('''insert into notification_batches
                 (id,task_id,period,window_start,window_end,expected,channels,expires_at) values(?,?,?,?,?,?,?,?)''',
                 (batch_id,task_id,period,window['window_start'],end,json.dumps(expected),json.dumps(channels),expiry(window['date'],settings.timezone)))
+        elif existing['state']=='waiting':
+            # Configuration can change while generation is incomplete. Sent batches stay immutable.
+            store.db.execute('update notification_batches set expected=? where id=?',(json.dumps(expected),batch_id))
         result.append(batch_id)
     store.db.commit()
     return result
@@ -45,7 +48,9 @@ def finish_batches(settings, store, batch_ids: list[str]) -> dict:
 def batch_message(settings, store, batch) -> tuple[str,dict]:
     label={'daily':'日报','weekly':'周报','monthly':'月报','interval':'定期新闻'}[batch['period']]
     subject=settings.values.get('project',{}).get('name','Newspaper')+' · '+label+' · '+batch['window_end'][:10]
-    message=news_message(settings,[(key,store.document(key)) for key in json.loads(batch['expected'])],subject)
+    if batch['correction_note']:subject+=' · 更正'
+    message=news_message(settings,[(key,store.document(key)) for key in json.loads(batch['expected'])],subject,
+                         notice=batch['correction_note'])
     return subject,message
 
 

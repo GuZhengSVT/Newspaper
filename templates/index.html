@@ -2,6 +2,13 @@
 {% from 'parts.html' import articles, contents %}
 {% block body %}
 <div class="date-bar"><h1><time datetime="{{ today }}">{{ today_label }}</time></h1><span>{{ timezone_label }}</span></div>
+<div id="homepage" data-layout="{{ homepage.get('layout', 'tabs') }}" data-layout-switch="{{ 'true' if homepage.get('layout_switch', true) else 'false' }}">
+<div class="home-controls" hidden>
+  <div class="home-tabs" role="tablist" aria-label="新闻板块">
+    {% for column in columns %}<button type="button" id="tab-{{ column.anchor }}" role="tab" aria-controls="{{ column.anchor }}" aria-selected="{{ 'true' if loop.first else 'false' }}" tabindex="{{ '0' if loop.first else '-1' }}">{{ column.label }}</button>{% endfor %}
+  </div>
+  {% if homepage.get('layout_switch', true) %}<label class="layout-setting">首页布局 <select id="home-layout" aria-label="首页布局"><option value="tabs">按钮切换</option><option value="columns">分栏展示</option></select></label>{% endif %}
+</div>
 <div class="reading-layout home-layout">
   {{ contents(toc_groups) }}
   <div class="news-columns">
@@ -14,5 +21,6 @@
     </section>
   {% endfor %}
   </div>
+</div>
 </div>
 {% endblock %}

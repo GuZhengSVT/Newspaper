@@ -135,6 +135,8 @@ class Settings:
             if set(section.get('prompts',{}))-{'plan','select','edit','review','repair','compress','collect'}:raise ValueError('Unknown section prompt stage')
         home=self.values.get('homepage',{})
         if home.get('mode','groups') not in {'groups','sections','index'}:raise ValueError('Invalid homepage mode')
+        if home.get('layout','tabs') not in {'tabs','columns'}:raise ValueError('Invalid homepage layout')
+        if type(home.get('layout_switch',True)) is not bool:raise ValueError('Homepage layout_switch must be boolean')
         if not set(home.get('groups',[e['id'] for e in self.editions])) <= {e['id'] for e in self.values.get('editions',self.editions)}:raise ValueError('Unknown homepage group')
         if not set(home.get('sections',[])) <= {s['id'] for s in self.values.get('sections',[])}:raise ValueError('Unknown homepage section')
 

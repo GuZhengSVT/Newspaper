@@ -127,7 +127,7 @@ class NewspaperTests(unittest.TestCase):
         self.assertFalse(self.store.db.execute("SELECT 1 FROM deliveries WHERE day=?", (old["date"],)).fetchone())
         self.assertFalse(self.store.db.execute("SELECT 1 FROM events WHERE day=?", (old["date"],)).fetchone())
         for p in self.settings.web.rglob("*"):
-            if p.is_file(): self.assertNotIn(old["summary"], p.read_text())
+            if p.is_file(): self.assertNotIn(old["summary"].encode(), p.read_bytes())
         self.assertNotIn(old["summary"].encode(), (self.settings.data / "newspaper.sqlite").read_bytes())
 
     def test_expiry_boundary_is_not_extended_by_rebuild(self):

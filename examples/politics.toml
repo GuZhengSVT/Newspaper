@@ -1,0 +1,358 @@
+# Optional standalone politics project. Copy to a private project file to use it,
+# or merge its group and sections into your own project and homepage.groups.
+# Official releases establish a party's position; disputed claims need independent evidence.
+[project]
+name = "Newspaper"
+timezone = "UTC"
+
+[schedule]
+period = "daily"
+time = "12:00"
+
+[homepage]
+mode = "groups"
+layout = "tabs"
+layout_switch = true
+groups = ["politics"]
+
+[[groups]]
+id = "politics"
+name = "政治"
+sections = ["politics-china", "politics-us", "politics-europe", "politics-russia-ukraine", "politics-middle-east", "politics-south-america", "politics-africa", "politics-other"]
+
+[[sections]]
+id = "politics-china"
+name = "中国"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。中国重大内政、立法、公共政策及外交事件。俄乌战争和中东冲突相关外交进展归入对应专题，避免重复。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["zh", "en"]
+domains = ["reuters.com", "apnews.com", "gov.cn", "npc.gov.cn", "news.cn"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "中国外交部"
+url = "https://www.mfa.gov.cn/web/fyrbt_673021/jzhsl_673025/"
+kind = "index"
+required = false
+link_pattern = "/jzhsl_673025/\\d{6}/t\\d{8}_\\d+\\.shtml"
+
+[[sections.sources]]
+name = "中国新闻网·即时新闻"
+url = "https://www.chinanews.com.cn/rss/scroll-news.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "BBC·中国"
+url = "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-us"
+name = "美国"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。美国重大联邦政策、选举、立法、司法与外交事件；加拿大新闻不在本板块，战争专题优先归入对应板块。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["en", "zh"]
+domains = ["reuters.com", "apnews.com"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "白宫发布"
+url = "https://www.whitehouse.gov/briefings-statements/"
+kind = "index"
+required = false
+link_pattern = "/briefings-statements/20\\d{2}/\\d{2}/[^/]+/"
+
+[[sections.sources]]
+name = "BBC·美国与加拿大"
+url = "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·美国政治"
+url = "https://www.theguardian.com/us-news/us-politics/rss"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-europe"
+name = "欧洲"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。欧洲国家及欧盟重大政治、选举、立法与外交事件；涉及俄乌战争的战况、援助、制裁与谈判归入俄乌战争。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["en", "zh"]
+domains = ["reuters.com", "apnews.com", "consilium.europa.eu", "europarl.europa.eu"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "英国外交、联邦及发展事务部"
+url = "https://www.gov.uk/government/organisations/foreign-commonwealth-development-office.atom"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "BBC·欧洲"
+url = "https://feeds.bbci.co.uk/news/world/europe/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·欧洲"
+url = "https://www.theguardian.com/world/europe-news/rss"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-russia-ukraine"
+name = "俄乌战争"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。俄乌战争重大军事进展、外交谈判、援助与制裁、人道影响。该专题优先于地理板块；战果、伤亡与领土控制须注明主张方、时间和核实状态，不将参战方声明直接认定为事实。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["en", "zh", "uk", "ru"]
+domains = ["reuters.com", "apnews.com", "president.gov.ua", "en.kremlin.ru"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "联合国新闻·欧洲"
+url = "https://news.un.org/feed/subscribe/en/news/region/europe/feed/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "BBC·欧洲"
+url = "https://feeds.bbci.co.uk/news/world/europe/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·乌克兰"
+url = "https://www.theguardian.com/world/ukraine/rss"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-middle-east"
+name = "中东地区"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。中东地区重大政治、安全、冲突、外交谈判与人道事件；跨国涉中东冲突新闻集中归入本板块。伤亡、袭击责任及战果须区分官方声明、媒体报道与独立核实。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["en", "zh", "ar"]
+domains = ["reuters.com", "apnews.com"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "联合国 OCHA·巴勒斯坦"
+url = "https://www.ochaopt.org/updates"
+kind = "index"
+required = false
+link_pattern = "/content/[^/#?]+"
+
+[[sections.sources]]
+name = "BBC·中东"
+url = "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·中东"
+url = "https://www.theguardian.com/world/middleeast/rss"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-south-america"
+name = "南美"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。南美洲国家重大政治、选举、立法、外交与地区合作事件；中美洲、墨西哥及加勒比地区归入其他。巴西来源不代表整个南美，须主动补查其他南美国家。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["es", "pt", "en", "zh"]
+domains = ["reuters.com", "apnews.com"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "巴西通讯社·政治"
+url = "https://agenciabrasil.ebc.com.br/politica"
+kind = "index"
+required = false
+link_pattern = "/politica/noticia/20\\d{2}-\\d{2}/[^/]+"
+
+[[sections.sources]]
+name = "BBC·拉丁美洲"
+url = "https://feeds.bbci.co.uk/news/world/latin_america/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·美洲"
+url = "https://www.theguardian.com/world/americas/rss"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-africa"
+name = "非洲"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。非洲国家重大政治、选举、政变、冲突、外交及非盟事务；地处非洲的中东专题事件优先归入中东地区。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["en", "fr", "zh"]
+domains = ["reuters.com", "apnews.com"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "非洲联盟"
+url = "https://au.int/en/happening/pressreleases"
+kind = "index"
+required = false
+link_pattern = "/en/(pressreleases|newsevents)/\\d{8}/[^/]+"
+
+[[sections.sources]]
+name = "联合国新闻·非洲"
+url = "https://news.un.org/feed/subscribe/en/news/region/africa/feed/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "BBC·非洲"
+url = "https://feeds.bbci.co.uk/news/world/africa/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·非洲"
+url = "https://www.theguardian.com/world/africa/rss"
+kind = "rss"
+required = false
+
+[[sections]]
+id = "politics-other"
+name = "其他"
+scope = "仅收录重大或重要政治事件。中性事实报道，区分事实、各方表态、指控与预测；不推测动机。未被前述板块覆盖的国际重大政治事件，包括其他亚洲国家、大洋洲、加拿大、中美洲与加勒比地区、全球多边事务。已归入俄乌战争或中东专题的事件不重复收录。"
+enabled = true
+
+[sections.search]
+queries = []
+languages = ["en", "zh"]
+domains = ["reuters.com", "apnews.com"]
+
+[sections.filter]
+importance = ["重大", "重要"]
+reliability = ["A", "B"]
+require_primary = false
+
+[sections.prompts]
+plan = "先读已配信源，再按地域与事件缺口补查；优先核对官方原文及路透社、美联社等独立报道。"
+select = "严格按 scope 归类，同一事件只收入最相关子板块；俄乌战争、中东专题优先。"
+edit = "官方及参战方主张必须归因；争议数据注明口径与核实状态。"
+review = "核对归类、重复收录、事实与声明的区分及争议证据。"
+
+[[sections.sources]]
+name = "联合国新闻"
+url = "https://news.un.org/feed/subscribe/en/news/all/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "BBC·亚洲"
+url = "https://feeds.bbci.co.uk/news/world/asia/rss.xml"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "CNA·世界"
+url = "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6311"
+kind = "rss"
+required = false
+
+[[sections.sources]]
+name = "卫报·世界"
+url = "https://www.theguardian.com/world/rss"
+kind = "rss"
+required = false

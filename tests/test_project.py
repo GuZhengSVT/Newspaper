@@ -254,6 +254,34 @@ class ProjectTests(unittest.TestCase):
         build(index,self.store);home=(settings.web/'current/index.html').read_text()
         self.assertIn('First group',home);self.assertNotIn('离线测试文本',home)
 
+    def test_homepage_layout_and_reader_switch_are_independent_of_content_mode(self):
+        settings=self.make_settings();self.store.settings=settings
+        for member in jobs(settings,self.now):self.save(*member)
+        for mode in ['groups','sections','index']:
+            for layout,switch in [('tabs',True),('columns',True),('tabs',False),('columns',False)]:
+                with self.subTest(mode=mode,layout=layout,switch=switch):
+                    configured=Settings({**settings.values,'homepage':{'mode':mode,'layout':layout,'layout_switch':switch}},
+                                        settings.data,settings.web,settings.base_url)
+                    configured.validate();build(configured,self.store)
+                    home=(settings.web/'current/index.html').read_text()
+                    self.assertIn('data-layout="'+layout+'"',home)
+                    self.assertEqual('id="home-layout"' in home,switch)
+                    self.assertIn('role="tablist"',home)
+                    self.assertIn('aria-controls="'+('section-fixture' if mode=='sections' else 'column-first')+'"',home)
+                    self.assertEqual('离线测试文本' in home,mode!='index')
+        for home in [{'layout':'invalid'},{'layout_switch':'false'}]:
+            with self.subTest(home=home),self.assertRaises(ValueError):
+                Settings({**settings.values,'homepage':home},settings.data,settings.web,settings.base_url).validate()
+
+    def test_politics_preset_has_eight_sections_and_valid_source_configuration(self):
+        import tomllib
+        project=tomllib.loads((ROOT/'examples/politics.toml').read_text())
+        values={**project,'editions':project.pop('groups')}
+        settings=Settings(values,self.root/'data',self.root/'web','https://example.test')
+        settings.validate()
+        self.assertEqual([s['name'] for s in settings.sections],['中国','美国','欧洲','俄乌战争','中东地区','南美','非洲','其他'])
+        self.assertTrue(all(len(s['sources'])>=3 for s in settings.sections))
+
     def test_homepage_can_select_individual_sections(self):
         settings=self.make_settings();self.store.settings=settings
         for member in jobs(settings,self.now):self.save(*member)

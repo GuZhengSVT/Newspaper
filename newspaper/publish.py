@@ -158,7 +158,7 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
                                      for s in doc.get("sections", []) for a in s["articles"]])})
         (release / "index.html").write_text(env.get_template("index.html").render(
             today=today, today_label=datetime.fromtimestamp(now, ZoneInfo(settings.values.get('project',{}).get('timezone',TZ.key))).strftime("%Y年%m月%d日"),
-            columns=columns, toc_groups=toc_groups,
+            columns=columns, toc_groups=toc_groups, homepage=settings.values.get('homepage',{}),
         ))
         has_legacy = any(e["legacy"] for e in entries)
         archives = [("", "往期新闻", entries)]

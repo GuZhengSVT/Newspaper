@@ -1,5 +1,6 @@
 # Copy to project.local.toml, then reference it from your runtime config.
 # Examples only: no subscriptions, audience, model credentials or topics preselected for an owner.
+# Optional regional politics preset: examples/politics.toml (merge or use standalone).
 [project]
 name = "Newspaper"
 timezone = "UTC"
@@ -12,6 +13,8 @@ time = "12:00"
 
 [homepage]
 mode = "groups"                   # groups: full first-level content; sections: chosen subtopics; index: links
+layout = "tabs"                   # tabs: buttons show one panel; columns: side-by-side (stack on mobile)
+layout_switch = true               # allow readers to choose either layout; saved in their browser
 # Reorder or omit IDs here to customize the homepage independently of scheduling.
 groups = ["research", "culture"]
 # sections = ["research-news", "interactive-media"]  # for mode = "sections"

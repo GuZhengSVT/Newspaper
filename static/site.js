@@ -20,6 +20,87 @@
     try { localStorage.setItem('newspaper-theme', savedTheme); } catch {}
   });
 
+  const home = document.querySelector('#homepage');
+  if (home) {
+    const controls = home.querySelector('.home-controls');
+    const tablist = home.querySelector('.home-tabs');
+    const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+    const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));
+    const layoutSelect = home.querySelector('#home-layout');
+    let active = 0;
+    let layout = home.dataset.layout;
+    if (home.dataset.layoutSwitch === 'true') {
+      try {
+        const saved = localStorage.getItem('newspaper-home-layout');
+        if (['tabs', 'columns'].includes(saved)) layout = saved;
+      } catch {}
+    }
+    home.style.setProperty('--home-columns', Math.min(3, Math.max(1, panels.length)));
+    home.dataset.enhanced = 'true';
+    function renderHome() {
+      home.dataset.layout = layout;
+      controls.hidden = layout === 'columns' && !layoutSelect;
+      tablist.hidden = layout !== 'tabs';
+      if (layoutSelect) layoutSelect.value = layout;
+      panels.forEach((panel, index) => {
+        const selected = index === active;
+        panel.hidden = layout === 'tabs' && !selected;
+        tabs[index].setAttribute('aria-selected', String(selected));
+        tabs[index].tabIndex = selected ? 0 : -1;
+        if (layout === 'tabs') {
+          panel.setAttribute('role', 'tabpanel');
+          panel.setAttribute('aria-labelledby', tabs[index].id);
+          panel.tabIndex = 0;
+        } else {
+          panel.removeAttribute('role');
+          panel.removeAttribute('aria-labelledby');
+          panel.removeAttribute('tabindex');
+        }
+        const outline = home.querySelector(`.toc-edition[href="#${panel.id}"]`);
+        if (outline?.nextElementSibling) outline.nextElementSibling.hidden = layout === 'tabs' && !selected;
+      });
+    }
+    function selectTarget(hash) {
+      const target = document.getElementById(hash.slice(1));
+      const index = panels.findIndex(panel => panel === target || panel.contains(target));
+      if (index < 0) return;
+      active = index;
+      renderHome();
+    }
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => { active = index; renderHome(); });
+      tab.addEventListener('keydown', event => {
+        let next;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === 'Home') next = 0;
+        if (event.key === 'End') next = tabs.length - 1;
+        if (next === undefined) return;
+        event.preventDefault();
+        active = next;
+        renderHome();
+        tabs[next].focus();
+      });
+    });
+    layoutSelect?.addEventListener('change', () => {
+      layout = layoutSelect.value;
+      renderHome();
+      try { localStorage.setItem('newspaper-home-layout', layout); } catch {}
+    });
+    // Activate a hidden panel before the directory's scrolling handler runs.
+    home.addEventListener('click', event => {
+      const link = event.target.closest('a[href^="#"]');
+      if (link) selectTarget(link.hash);
+    }, true);
+    window.addEventListener('hashchange', () => {
+      selectTarget(location.hash);
+      document.getElementById(location.hash.slice(1))?.scrollIntoView({block: 'start'});
+    });
+    renderHome();
+    selectTarget(location.hash);
+    if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({block: 'start'});
+  }
+
   const contents = document.querySelector('#contents-panel');
   const narrow = matchMedia('(max-width: 1279px)');
   if (contents) {

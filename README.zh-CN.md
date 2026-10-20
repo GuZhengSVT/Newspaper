@@ -102,6 +102,10 @@ time = "09:00"
 
 `[homepage] mode = "groups"` 直接展示一级板块正文，`groups` 列表控制显示范围和顺序。`mode = "sections"` 配合 `sections` 列表展示指定子板块；`mode = "index"` 仅显示各期链接。首页按子板块组合最新保留的一期，因此周报/月报会显示到下一次更新。每个板块带原期日期及链接；最新一期为空时不会复活更旧新闻。
 
+首页布局独立于内容模式：`layout = "tabs"`（默认）使用按钮切换板块，`layout = "columns"` 在桌面分栏、手机纵向排列。`layout_switch = true`（默认）显示“首页布局”选项并在浏览器保存读者选择；改为 `false` 则固定使用配置布局。切换按钮支持方向键、Home/End，目录或带锚点的链接会先打开对应板块。关闭 JavaScript 时仍可阅读全部板块。
+
+[examples/politics.toml](examples/politics.toml) 提供可选政治配置，包含中国、美国、欧洲、俄乌战争、中东地区、南美、非洲、其他八个子板块。可将其中的一级板块和子板块合并到私有项目文件，并在 `homepage.groups` 中加入 `politics`；也可作为独立项目使用。来源包括官方发布、联合国，以及 BBC、卫报、巴西通讯社和 CNA。路透社、美联社及相关官方网站作为补搜提示，不计入已读取信源。战争专题优先于地域归类，争议声明须归因、交叉核实。来源访问情况可能变化，非强制来源失败仍需搜索补缺。
+
 界面支持目录、手机布局、明暗模式、归档搜索、Markdown/JSON 下载。目前界面文案与 Schema 枚举采用中文。综合 RSS 为 `/feed.xml`，一级板块 RSS 为 `/feed-<一级ID>.xml`。正文路径为 `/daily/YYYY-MM-DD/<发布ID>/`，下载为 `/downloads/YYYY-MM-DD/<发布ID>.md` 或 `.json`；分周期后的发布 ID 可通过 `schedule` 查看。
 
 ## VPS 部署和维护

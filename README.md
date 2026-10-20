@@ -133,7 +133,7 @@ sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli status
 
 Run commands from the checkout or install the package into the virtual environment. The generation timer checks schedules every minute. Published slots are skipped. Failed publications wait at least five minutes and permit at most three failed attempts per six hours; other publications can proceed. Model transport/transient HTTP failures have their own three-request retry bound. A run has a 50-minute systemd timeout. The notify/cleanup timers run every five minutes; cleanup also runs at midnight and before generation. Process locking prevents overlapping writers.
 
-The included Caddyfile serves HTTP on port 80. Set `base_url` to your domain/address, configure HTTPS/authentication as appropriate, and check firewall access. Only generated public files are exposed. API keys, evidence and administrative state are not web routes. Website builds switch atomically; a failed build preserves the previous complete release. Reviewed saved drafts resume without repeating model work.
+Set the top-level runtime `base_url` to the public HTTPS website domain (for example `https://news.example.com`); notification links and RSS use this origin, independently of `[model].base_url`. Run `build` after changing it to refresh RSS; future notifications read the new origin automatically. The included Caddyfile serves HTTP on port 80. Configure the domain, HTTPS/authentication and firewall access as appropriate. Only generated public files are exposed. API keys, evidence and administrative state are not web routes. Website builds switch atomically; a failed build preserves the previous complete release. Reviewed saved drafts resume without repeating model work.
 
 ## Evidence and retention
 

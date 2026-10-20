@@ -2,7 +2,8 @@
 project_file = "project.local.toml"
 data_dir = "/var/lib/newspaper"
 web_dir = "/srv/newspaper"
-base_url = "http://127.0.0.1"
+# Public website origin used in notification links and RSS; use your HTTPS domain.
+base_url = "https://news.example.com"
 retention_days = 30
 
 [model]

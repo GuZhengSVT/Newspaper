@@ -133,7 +133,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visibl
 }
 @media (max-width: 600px) {
   .masthead, main { width: calc(100% - 32px); }
-  .masthead { min-height: 64px; gap: 12px; }
+  .masthead { min-height: 64px; gap: 8px 12px; flex-wrap: wrap; padding-block: 12px; }
   .wordmark { font-size: 25px; }
   .site-nav { gap: 11px; font-size: 13px; }
   .site-nav button { padding: 4px 6px; }

@@ -87,6 +87,13 @@ a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visibl
 .story-image figcaption { margin-top: 6px; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .story-image a { color: var(--accent); }
 .empty-state { color: var(--muted); margin: 24px 0; font-size: 16px; }
+.bilingual-toggle { margin: 0 0 18px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 4px; color: var(--accent); background: var(--surface); font: inherit; font-size: 14px; cursor: pointer; }
+.bilingual-toggle[aria-pressed="true"] { border-color: var(--accent); }
+.news-body .translation-pair { margin: 1.4em 0; }
+.news-body .translation-pair p { margin: 0 0 .5em; }
+.translation-pair [lang="en"] { font-family: Georgia, "Times New Roman", serif; line-height: 1.85; }
+.translation-pair [lang="zh-CN"] { color: var(--muted); }
+.story-title.bilingual-title { margin-bottom: .4em; }
 .page-heading { margin: 26px 0 30px; }
 .page-heading h1 { font-size: clamp(25px, 3vw, 32px); line-height: 1.55; font-weight: 650; margin: 10px 0; }
 .back { color: var(--muted); font-size: 14px; }

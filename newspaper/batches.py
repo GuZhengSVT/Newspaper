@@ -10,10 +10,12 @@ from .messages import news_message
 
 
 def prepare_batches(settings, store, jobs: list) -> list[str]:
+    from .accounts import account_mode
     tasks={}
     for job, window in jobs:
         if job.get('notify',True):tasks.setdefault((job['task_id'],window['window_end']),[]).append((job,window))
     channels=[c for c in ['email','telegram'] if settings.values.get('notifications',{}).get(c,{}).get('enabled')]
+    if channels and account_mode(settings):channels=['accounts']
     result=[]
     for (task_id,end), members in tasks.items():
         batch_id='b-'+hashlib.sha256((task_id+'\0'+end).encode()).hexdigest()[:32]
@@ -28,7 +30,7 @@ def prepare_batches(settings, store, jobs: list) -> list[str]:
                 (batch_id,task_id,period,window['window_start'],end,json.dumps(expected),json.dumps(channels),expiry(window['date'],settings.timezone)))
         elif existing['state']=='waiting':
             # Configuration can change while generation is incomplete. Sent batches stay immutable.
-            store.db.execute('update notification_batches set expected=? where id=?',(json.dumps(expected),batch_id))
+            store.db.execute('update notification_batches set expected=?,channels=? where id=?',(json.dumps(expected),json.dumps(channels),batch_id))
         result.append(batch_id)
     store.db.commit()
     return result
@@ -38,23 +40,34 @@ def finish_batches(settings, store, batch_ids: list[str]) -> dict:
     for batch_id in batch_ids:
         row=store.db.execute('select * from notification_batches where id=?',(batch_id,)).fetchone()
         if row['state']!='waiting' or not all(store.published(key) for key in json.loads(row['expected'])):continue
-        for channel in json.loads(row['channels']):
-            store.db.execute('insert or ignore into notification_outbox(batch_id,channel) values(?,?)',(batch_id,channel))
+        if json.loads(row['channels'])==['accounts']:
+            from .accounts import prepare_recipients
+            prepare_recipients(settings,store,row)
+        else:
+            for channel in json.loads(row['channels']):
+                store.db.execute('insert or ignore into notification_outbox(batch_id,channel) values(?,?)',(batch_id,channel))
         store.db.execute("update notification_batches set state='ready' where id=?",(batch_id,))
     store.db.commit()
     return deliver_batches(settings,store)
 
 
-def batch_message(settings, store, batch) -> tuple[str,dict]:
+def batch_subject(settings, batch) -> str:
     label={'daily':'日报','weekly':'周报','monthly':'月报','interval':'定期新闻'}[batch['period']]
     subject=settings.values.get('project',{}).get('name','Newspaper')+' · '+label+' · '+batch['window_end'][:10]
     if batch['correction_note']:subject+=' · 更正'
+    return subject
+
+
+def batch_message(settings, store, batch) -> tuple[str,dict]:
+    subject=batch_subject(settings,batch)
     message=news_message(settings,[(key,store.document(key)) for key in json.loads(batch['expected'])],subject,
                          notice=batch['correction_note'])
     return subject,message
 
 
 def deliver_batches(settings, store) -> dict:
+    from .accounts import account_mode, deliver_accounts
+    if account_mode(settings):return deliver_accounts(settings,store)
     now=utcnow().timestamp();result={'sent':0,'failed':0,'unconfigured':0,'uncertain':0}
     # A crash after provider acceptance cannot safely be retried (Telegram has no idempotency key).
     interrupted=store.db.execute("update notification_outbox set state='uncertain',last_error='InterruptedSend' where state='sending'")

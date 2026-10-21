@@ -13,8 +13,9 @@
   {{ contents(toc_groups) }}
   <div class="news-columns">
   {% for column in columns %}
-    <section class="news-column" id="{{ column.anchor }}" data-outline>
+    <section class="news-column" id="{{ column.anchor }}" data-outline data-group="{{ column.id }}">
       <header class="column-heading"><h2><a href="/archive/{{ column.id }}/" aria-label="查看{{ column.label }}往期新闻">{{ column.label }}</a></h2><a class="history-link" href="/archive/{{ column.id }}/">往期</a></header>
+      {% if column.view and not column.index_only %}<button class="group-bilingual-toggle bilingual-toggle" type="button" aria-pressed="false" hidden>本板块中英对译：关闭</button>{% endif %}
       {% if column.index_only %}
       {% for issue in column.issues %}<p><a href="{{ issue.url }}">{{ issue.title }}</a> · {{ issue.date }}</p>{% else %}<p class="empty-state">尚未发布。</p>{% endfor %}
       {% elif column.view %}{{ articles(column.view, true) }}{% else %}<p class="empty-state">{{ '尚未发布。' if column.sections else '今日尚未发布。' }}</p>{% endif %}

@@ -54,10 +54,14 @@ def report_view(doc: dict, key: str, settings=None) -> dict:
             if len(paragraphs)>limit:
                 size=(len(paragraphs)+limit-1)//limit
                 paragraphs=[' '.join(paragraphs[i:i+size]) for i in range(0,len(paragraphs),size)]
+            paragraphs=paragraphs or [article['summary']]
+            from .translation import paragraph_pairs
             articles.append({**article, 'anchor': f'{prefix}-s{si}-a{ai}',
-                'paragraphs': paragraphs or [article['summary']], 'references': list(references.values()),
+                'paragraphs': paragraphs, 'bilingual_paragraphs': paragraph_pairs(article,paragraphs) if article.get('bilingual') else [],
+                'references': list(references.values()),
                 'time': display_time(article['published_at'],timezone=timezone)})
-        sections.append({'name': section['name'], 'anchor': f'{prefix}-s{si}', 'articles': articles})
+        sections.append({'id':section['id'],'name': section['name'], 'anchor': f'{prefix}-s{si}', 'articles': articles,
+                         'has_bilingual':all(a.get('bilingual') for a in articles)})
     return {'key': key, 'date': doc['date'], 'title': doc['title'], 'sections': sections,
             'count': sum(len(s['articles']) for s in sections),
             'window': (display_time(doc['window_start'],timezone=timezone) + ' — ' + display_time(doc['window_end'],timezone=timezone))

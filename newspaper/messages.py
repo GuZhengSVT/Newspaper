@@ -26,7 +26,8 @@ def text_chunks(text: str, limit: int = 3500) -> list[str]:
     return chunks
 
 
-def news_message(settings, documents: list[tuple[str,dict]], subject: str, *, notice: str = '') -> dict:
+def news_message(settings, documents: list[tuple[str,dict]], subject: str, *, notice: str = '',
+                 bilingual_sections: set[str] | None = None) -> dict:
     plain=[];html=['<h1 style="margin:0 0 24px;font-family:Georgia,&#34;Times New Roman&#34;,&#34;Songti SC&#34;,serif;font-size:28px;line-height:1.4;font-weight:700">'+escape(subject)+'</h1>'];parts=[];pending=[];pending_size=0;links=[]
 
     def flush():
@@ -55,14 +56,26 @@ def news_message(settings, documents: list[tuple[str,dict]], subject: str, *, no
         if not view['count']:
             block('本期未收录新闻。');html.append('<p>本期未收录新闻。</p>')
         for section in view['sections']:
+            bilingual=section['id'] in (bilingual_sections or set())
             block(section['name'],'b');html.append('<h3>'+escape(section['name'])+'</h3>')
             for article in section['articles']:
+                if bilingual:
+                    from .translation import validate_bilingual
+                    validate_bilingual(article,required=True)
+                    block(article['bilingual']['title_en'],'b')
+                    html.append('<h4 lang="en">'+escape(article['bilingual']['title_en'])+'</h4>')
                 block(article['title'],'b');html.append('<h4>'+escape(article['title'])+'</h4>')
                 meta=article['time']
                 if article.get('importance'):meta+=' · '+article['importance']+' · 可靠性 '+article['reliability']
                 block(meta);html.append('<p style="color:#666;font-size:13px">'+escape(meta)+'</p>')
-                for paragraph in article['paragraphs']:
-                    block(paragraph);html.append('<p>'+escape(paragraph)+'</p>')
+                if bilingual:
+                    for pair in article['bilingual_paragraphs']:
+                        block(pair['en']);block(pair['zh'])
+                        html.append('<div style="margin:20px 0"><p lang="en" style="margin:0 0 8px">'+escape(pair['en'])+
+                                    '</p><p lang="zh-CN" style="margin:0">'+escape(pair['zh'])+'</p></div>')
+                else:
+                    for paragraph in article['paragraphs']:
+                        block(paragraph);html.append('<p>'+escape(paragraph)+'</p>')
                 image=article.get('image')
                 if image:
                     flush()

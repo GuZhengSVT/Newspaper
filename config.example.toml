@@ -5,6 +5,11 @@ web_dir = "/srv/newspaper"
 # Public website origin used in notification links and RSS; use your HTTPS domain.
 base_url = "https://news.example.com"
 retention_days = 30
+accounts_file = "accounts.local.toml"
+
+[translation]
+# Generate and independently review English alongside the approved Chinese, before publishing.
+enabled = true
 
 [model]
 provider = "compatible"
@@ -20,6 +25,13 @@ engines = ["bing", "keenable", "exa"]
 max_candidates_per_edition = 12
 max_fetches_per_edition = 24
 timeout_seconds = 35
+
+[notifications]
+mode = "accounts"
+
+[notifications.defaults]
+subscriptions = ["*"]
+bilingual = false
 
 [notifications.email]
 enabled = false

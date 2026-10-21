@@ -1,0 +1,23 @@
+# Private account data. Copy to accounts.local.toml, outside the public repository.
+# No public registration or subscription endpoint. The administrator edits this file.
+# Unspecified preferences inherit [notifications.defaults] in the runtime config.
+# Publication and delivery times inherit the global/group/section schedules.
+
+[[accounts]]
+id = "ExampleAdmin"
+name = "Example administrator"
+emails = ["reader@example.com", "reader-backup@example.net"]
+# One numeric Telegram chat ID; the user must first start the configured bot.
+telegram_chat_id = "123456789"
+# No subscriptions field: inherit the default subscription scope and bilingual setting.
+
+[[accounts]]
+id = "ExampleLearner"
+emails = ["learner@example.org"]
+# Explicit rules subscribe only to the named groups/sections. [] pauses all subscriptions.
+# Use IDs from project.local.toml; '*' selects every enabled section.
+# Specific section rules override group rules, and group rules override '*'.
+subscriptions = [
+  { section = "research", bilingual = true },
+  { section = "culture" },
+]

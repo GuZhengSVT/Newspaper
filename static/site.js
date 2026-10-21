@@ -21,6 +21,61 @@
   });
 
   const home = document.querySelector('#homepage');
+  const bilingualSections = [...document.querySelectorAll('.news-section[data-section]')];
+  const groupToggles = [...document.querySelectorAll('.group-bilingual-toggle')];
+  function refreshGroupToggles() {
+    groupToggles.forEach(toggle => {
+      const children = [...toggle.closest('.news-column').querySelectorAll('.news-section .bilingual-toggle')];
+      toggle.hidden = children.length === 0;
+      const count = children.filter(child => child.getAttribute('aria-pressed') === 'true').length;
+      const state = count === 0 ? 'false' : count === children.length ? 'true' : 'mixed';
+      toggle.setAttribute('aria-pressed', state);
+      toggle.textContent = `本板块中英对译：${state === 'mixed' ? '部分开启' : state === 'true' ? '开启' : '关闭'}`;
+    });
+  }
+  function setBilingual(id, enabled) {
+    bilingualSections.filter(section => section.dataset.section === id).forEach(section => {
+      const toggle = section.querySelector('.bilingual-toggle');
+      if (!toggle) return;
+      toggle.hidden = false;
+      toggle.setAttribute('aria-pressed', String(enabled));
+      toggle.textContent = `中英对译：${enabled ? '开启' : '关闭'}`;
+      section.querySelectorAll('.bilingual-body, .bilingual-title').forEach(node => { node.hidden = !enabled; });
+      section.querySelectorAll('.chinese-body').forEach(node => { node.hidden = enabled; });
+    });
+  }
+  bilingualSections.forEach(section => {
+    const toggle = section.querySelector('.bilingual-toggle');
+    if (!toggle) return;
+    const id = section.dataset.section;
+    let enabled = false;
+    try {
+      const saved = localStorage.getItem('newspaper-bilingual-' + id);
+      const group = section.closest('[data-group]')?.dataset.group;
+      enabled = (saved ?? localStorage.getItem('newspaper-bilingual-group-' + group)) === 'true';
+    } catch {}
+    setBilingual(id, enabled);
+    toggle.addEventListener('click', () => {
+      const next = toggle.getAttribute('aria-pressed') !== 'true';
+      setBilingual(id, next);
+      try { localStorage.setItem('newspaper-bilingual-' + id, String(next)); } catch {}
+      refreshGroupToggles();
+    });
+  });
+  groupToggles.forEach(toggle => {
+    toggle.addEventListener('click', () => {
+      const group = toggle.closest('.news-column');
+      const enabled = toggle.getAttribute('aria-pressed') !== 'true';
+      group.querySelectorAll('.news-section[data-section]').forEach(section => {
+        const id = section.dataset.section;
+        setBilingual(id, enabled);
+        try { localStorage.setItem('newspaper-bilingual-' + id, String(enabled)); } catch {}
+      });
+      try { localStorage.setItem('newspaper-bilingual-group-' + group.dataset.group, String(enabled)); } catch {}
+      refreshGroupToggles();
+    });
+  });
+  refreshGroupToggles();
   if (home) {
     const controls = home.querySelector('.home-controls');
     const tablist = home.querySelector('.home-tabs');

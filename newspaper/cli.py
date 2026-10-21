@@ -27,7 +27,7 @@ def main() -> int:
     run.add_argument('--task',help='Run only the task ID printed by schedule')
     run.add_argument("--cutoff", type=datetime.fromisoformat,
                      help="Explicit timezone-aware cutoff for today's issue; defaults to noon")
-    for cmd in [ "build", "clean", "notify", "status", "doctor", "schedule", "check-config"]:
+    for cmd in [ "build", "clean", "notify", "status", "doctor", "schedule", "check-config", "accounts", "translate"]:
         command_parser=commands.add_parser(cmd)
         if cmd=='schedule':command_parser.add_argument('--manual',action='store_true',help='List all enabled tasks, including future schedules')
     legacy = commands.add_parser("import-legacy")
@@ -35,6 +35,13 @@ def main() -> int:
     args = parser.parse_args()
     try:
         settings = Settings.load(args.config)
+        if args.command=='accounts':
+            from .accounts import accounts, account_mode
+            # Addresses stay private even in command output and service logs.
+            print(json.dumps({'mode':'accounts' if account_mode(settings) else 'legacy','accounts':[
+                {'id':a['id'],'name':a.get('name',a['id']),'email_count':len(a['emails']),
+                 'telegram_bound':bool(a['telegram_chat_id']),'subscriptions':a['options']}
+                for a in accounts(settings)]},ensure_ascii=False));return 0
         if args.command in {'schedule','check-config'}:
             from .schedule import jobs
             from .storage import utcnow
@@ -70,12 +77,27 @@ def main() -> int:
                     result = clean(settings, store)
                 elif args.command == "notify":
                     result = deliver(settings, store)
+                elif args.command == 'translate':
+                    from .translation import translate
+                    from .model import Model
+                    from .storage import atomic_json
+                    from .publish import markdown
+                    client=Model(settings);count=0
+                    for entry in store.editions():
+                        key=entry['day'];doc=store.document(key)
+                        changed=translate(doc,client)
+                        if changed:
+                            atomic_json(settings.data/'editions'/key/'report.json',doc)
+                            (settings.data/'editions'/key/'report.md').write_text(markdown(doc,settings))
+                            count+=changed
+                    result={'translated_articles':count,**build(settings,store)}
                 elif args.command == "import-legacy":
                     result = import_legacy(settings, store, args.directory)
                 else:
                     result = {"published": len(store.editions()), "sections": len(settings.sections),
                               "notifications": [dict(r) for r in store.db.execute("SELECT channel,state,count(*) AS count FROM deliveries GROUP BY channel,state")],
                               "task_notifications": [dict(r) for r in store.db.execute("SELECT batch_id,channel,state,attempts,last_error FROM notification_outbox")],
+                              "account_notifications": [dict(r) for r in store.db.execute("SELECT batch_id,account_id,channel,state,attempts,progress,last_error FROM account_outbox")],
                               "tasks": [dict(r) for r in store.db.execute("SELECT id,period,window_end,state FROM notification_batches")]}
             finally:
                 store.close()

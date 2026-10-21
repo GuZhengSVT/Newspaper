@@ -48,6 +48,11 @@ class Settings:
             values['editions'] = project.get('groups', [])
             values['_project_dir'] = str(project_path.parent)
         load_credentials(Path(os.environ.get("NEWSPAPER_CREDENTIALS", "/etc/newspaper/credentials.env")))
+        if values.get('accounts_file'):
+            account_path = (config_path.parent / values['accounts_file']).resolve()
+            account_config = tomllib.loads(account_path.read_text())
+            if set(account_config) - {'accounts'}:raise ValueError('Unknown accounts file setting')
+            values['_accounts'] = account_config.get('accounts', [])
         data = Path(os.environ.get("NEWSPAPER_DATA", values.get("data_dir", "/var/lib/newspaper"))).resolve()
         web = Path(os.environ.get("NEWSPAPER_WEB", values.get("web_dir", "/srv/newspaper"))).resolve()
         if data == web or data in web.parents or web in data.parents:
@@ -100,6 +105,16 @@ class Settings:
 
     def validate(self) -> None:
         from .schedule import validate_schedule
+        from .accounts import accounts, account_mode
+        if self.values.get('notifications',{}).get('mode','legacy') not in {'legacy','accounts'}:
+            raise ValueError('Invalid notification mode')
+        accounts(self)
+        if account_mode(self) and not (self.values.get('project') or 'schedule' in self.values):
+            raise ValueError('Account notifications require a project or schedule')
+        if type(self.values.get('translation',{}).get('enabled',False)) is not bool:
+            raise ValueError('Translation enabled must be boolean')
+        if any(value for a in accounts(self) for value in a['options'].values()) and not self.values.get('translation',{}).get('enabled',False):
+            raise ValueError('Bilingual subscriptions require translation.enabled')
         ZoneInfo(self.values.get('project', {}).get('timezone', 'UTC'))
         self.editions  # Validate group/section assignment before any work begins.
         discovery=self.values.get('discovery',{})

@@ -16,10 +16,11 @@ from .storage import Store, utcnow
 from .messages import news_message, text_chunks
 
 
-def readiness(channel: str) -> bool:
+def readiness(channel: str, *, recipient: str | None = None) -> bool:
     keys = {"email": ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_FROM", "EMAIL_TO"],
             "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]}
-    return all(os.environ.get(k) for k in keys[channel])
+    required = keys[channel][:-1] if recipient else keys[channel]
+    return all(os.environ.get(k) for k in required)
 
 
 def enqueue(settings: Settings, store: Store, day: str) -> None:
@@ -42,12 +43,12 @@ class UncertainDelivery(RuntimeError):
 
 def send_text(settings: Settings, channel: str, subject: str, text: str, delivery_id: str,
               *, html_text: str | None = None, telegram_parts: list | None = None,
-              start_part: int = 0, on_part_sent=None) -> None:
+              start_part: int = 0, on_part_sent=None, recipient: str | None = None) -> None:
     if channel == "email":
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = os.environ["EMAIL_FROM"]
-        message["To"] = os.environ["EMAIL_TO"]
+        message["To"] = recipient if recipient is not None else os.environ["EMAIL_TO"]
         message["Date"] = formatdate(localtime=False)
         digest = hashlib.sha256((settings.base_url + delivery_id).encode()).hexdigest()[:24]
         message["Message-ID"] = f"<{digest}@newspaper.local>"
@@ -82,7 +83,7 @@ def send_text(settings: Settings, channel: str, subject: str, text: str, deliver
             for index in range(start_part,len(parts)):
                 part=parts[index];method=part['method']
                 payload={k:v for k,v in part.items() if k!='method'}
-                payload['chat_id']=os.environ['TELEGRAM_CHAT_ID']
+                payload['chat_id']=recipient if recipient is not None else os.environ['TELEGRAM_CHAT_ID']
                 if method=='sendMessage':payload['link_preview_options']={'is_disabled':True}
                 if index>start_part:time.sleep(1.1)
                 try:
@@ -102,6 +103,10 @@ def send_text(settings: Settings, channel: str, subject: str, text: str, deliver
 
 
 def deliver(settings: Settings, store: Store) -> dict:
+    from .accounts import account_mode
+    if account_mode(settings):
+        from .batches import deliver_batches
+        return deliver_batches(settings,store)
     now = utcnow().timestamp()
     interrupted=store.db.execute("UPDATE deliveries SET state='uncertain',last_error='InterruptedSend' WHERE state='sending'")
     uncertain=interrupted.rowcount;store.db.commit()

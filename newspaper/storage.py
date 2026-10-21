@@ -113,6 +113,13 @@ class Store:
             channel TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt REAL NOT NULL DEFAULT 0, last_error TEXT, PRIMARY KEY(batch_id,channel)
           );
+          CREATE TABLE IF NOT EXISTS account_outbox (
+            batch_id TEXT NOT NULL REFERENCES notification_batches(id) ON DELETE CASCADE,
+            account_id TEXT NOT NULL, channel TEXT NOT NULL, recipient TEXT NOT NULL, options TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+            progress INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0, last_error TEXT,
+            PRIMARY KEY(batch_id,account_id,channel,recipient)
+          );
         """)
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
         if "facts" not in columns:

@@ -1,14 +1,17 @@
 {% macro articles(view, home=false) %}
 {% if view.count %}
 {% for section in view.sections %}
-<section class="news-section" id="{{ section.anchor }}" data-outline>
+<section class="news-section" id="{{ section.anchor }}" data-outline data-section="{{ section.id }}">
   {% if home %}<h3 class="section-title">{{ section.name }}</h3>{% else %}<h2 class="section-title">{{ section.name }}</h2>{% endif %}
   {% if section.issue_url %}<p class="story-meta">更新于 {{ section.issue_date }} · <a href="{{ section.issue_url }}">本期</a></p>{% endif %}
+  {% if section.has_bilingual %}<button class="bilingual-toggle" type="button" aria-pressed="false" hidden>中英对译：关闭</button>{% endif %}
   {% for article in section.articles %}
   <article class="story" id="{{ article.anchor }}" data-outline>
+    {% if article.bilingual %}<p class="story-title bilingual-title" lang="en" hidden>{{ article.bilingual.title_en }}</p>{% endif %}
     {% if home %}<h4 class="story-title">{{ article.title }}</h4>{% else %}<h3 class="story-title">{{ article.title }}</h3>{% endif %}
     <p class="story-meta"><time>{{ article.time }}</time>{% if article.importance %}<span>{{ article.importance }}</span><span>可靠性 {{ article.reliability }}</span>{% endif %}{% if article.follow_up %}<span>进展</span>{% endif %}</p>
-    <div class="news-body">{% for paragraph in article.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}</div>
+    <div class="news-body chinese-body">{% for paragraph in article.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}</div>
+    {% if article.bilingual %}<div class="news-body bilingual-body" hidden>{% for pair in article.bilingual_paragraphs %}<div class="translation-pair"><p lang="en">{{ pair.en }}</p><p lang="zh-CN">{{ pair.zh }}</p></div>{% endfor %}</div>{% endif %}
     {% if article.image %}<figure class="story-image">
       <img src="{{ article.image.url }}" alt="{{ article.image.caption }}" width="{{ article.image.width }}" height="{{ article.image.height }}" loading="lazy" decoding="async" referrerpolicy="no-referrer">
       <figcaption>{{ article.image.caption }} · <a href="{{ article.image.source_url }}" target="_blank" rel="noopener noreferrer">图片来源</a></figcaption>

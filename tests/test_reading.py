@@ -30,7 +30,7 @@ class ReadingTests(unittest.TestCase):
         self.save(doc)
         build(self.settings, self.store)
         page = (self.settings.web/'current/daily'/self.day/'culture/index.html').read_text()
-        body = page.split('<div class="news-body">')[1].split('</div>')[0]
+        body = page.split('<div class="news-body chinese-body">')[1].split('</div>')[0]
         self.assertNotIn('<a ', body)
         self.assertEqual(body.count('离线测试文本'), 1)
         self.assertEqual(page.count('href="https://example.test/source"'), 1)

@@ -18,15 +18,17 @@ make check test
 cp config.example.toml config.local.toml
 cp project.example.toml project.local.toml
 cp .env.example credentials.env
+cp accounts.example.toml accounts.local.toml
 ```
 
-三份文件分别负责：
+配置文件分别负责：
 
 | 文件 | 用途 |
 | --- | --- |
 | `project.local.toml` | 板块分级、检索内容、提示词、筛选、周期、必查来源和首页 |
 | `config.local.toml` | 引用项目文件，设置模型接口、存储路径、网站地址、检索预算、推送开关 |
 | `credentials.env` | 模型密钥、SMTP 账号、收件人、Telegram Token/Chat ID |
+| `accounts.local.toml` | 管理员维护的账号、多个邮箱、一个 Telegram Chat ID、自选板块及对译选项 |
 
 本地文件已被 Git 忽略。完整设置模板见 [project.example.toml](project.example.toml)。运行配置的 `project_file` 相对于运行配置文件解析；提示词文件相对于项目文件解析。模型可使用自行选择的兼容接口，仓库不绑定个人模型或提供商。
 
@@ -99,6 +101,39 @@ time = "09:00"
 新闻允许可选外链配图，每条最多一张，网页、Markdown、HTML 邮件和 Telegram 均支持。候选只取自本条新闻实际引用的来源页面，并要求发布者提供有信息的图片描述；单独编辑步骤核对具体主体、版本及情境，无法确认关联时留空。程序检查 HTTPS 和重定向地址、解码、文件大小、尺寸及图像细节，排除小图、极端长宽比、空白图和明显模糊图。图注保留示意图等属性及来源；不使用站点标志、广告或无关装饰图。无合适配图或检查失败时保留纯文字新闻，配图不作为正文事实证据，图片二进制仅在校验时暂存内存，不保存本地副本。`batch` 仅用于另一条检索流程的主题分组，当前 `bounded` 模式不使用，也不控制推送。
 
 ## 首页与订阅
+
+### 中英对译
+
+`[translation] enabled = true` 在中文新闻通过事实复核后，生成英文标题与逐句英文并独立译审。英文以准确、自然、清晰为目标，面向中文母语的英语学习者，保留原稿的归因、限定和不确定性。中文原句由程序直接保留，译文按原句编号检查完整性和顺序，译审再核对含义与单句对应关系；限定修正后仍未通过则本次发布失败，不发布未经译审的英文。
+
+首页一级板块可整体切换，每个有完整译文的子板块也有“中英对译”按钮，首页与往期页面按同一板块 ID 在浏览器记住选择。**展示形式是一段英文、一段中文**，段内句子依次对应，段落边界与中文阅读相同。默认显示中文；无需浏览时调用模型。翻译与中文一起保存在公开 JSON 的 `article.bilingual` 内；中文 Markdown 和默认 RSS 保持原有用途。
+
+升级后执行 `.venv/bin/python -m newspaper.cli translate` 可为保留期内的历史稿件补齐对译并重建网站，保留日期和事实正文不变，不触发补推送。已成功翻译的文章再次运行会跳过。模型译审仍存在误判可能。
+
+### 私有账号推送
+
+运行配置顶层 `accounts_file = "accounts.local.toml"` 指向相对于运行配置的私有 TOML 文件，`[notifications] mode = "accounts"` 启用账号模式。管理员直接编辑该文件；系统没有公开注册、登录或订阅接口。用 `accounts.example.toml` 建立自己的文件，不要把真实收件地址或 Chat ID 提交到 Git。VPS 安装权限为 `root:newspaper 0640`。
+
+每个账号有唯一 `id`、可选 `name/enabled`、`emails` 数组、一个可选的数字字符串 `telegram_chat_id`。TG 用户须先与部署的机器人开始对话。订阅格式如下，填写项目中的一级或子板块 ID：
+
+```toml
+[[accounts]]
+id = "ExampleReader"
+emails = ["reader@example.com", "backup@example.net"]
+telegram_chat_id = "123456789"
+subscriptions = [
+  { section = "research", bilingual = true },
+  { section = "culture" },
+]
+```
+
+`[notifications.defaults] subscriptions = ["*"]` 默认订阅所有启用板块，`bilingual = false` 默认只推中文。账号不填 `subscriptions` 时继承默认范围，填 `[]` 则不订阅任何内容，填规则数组则只订阅数组指定的板块。规则省略 `bilingual` 时继承默认值；子板块规则覆盖一级规则，一级规则覆盖 `*`。关闭账号可设 `enabled = false`。账号未填写的偏好走默认配置；板块生成与推送时刻继续继承全局→一级→子板块的 `schedule`，同一任务全部生成完成后发送。板块或一级 `notify = false` 仍优先禁止推送。
+
+邮箱和 Telegram 只发送该账号订阅的板块；开启对译的板块使用与网站相同的英文段落＋中文段落。网页阅读按钮仅控制当前浏览器，不修改私有账号的推送偏好。邮箱和 Chat ID 未绑定时，该渠道不会发送，也不会借用其他账号或旧的全局收件地址。SMTP 和 Bot Token 仍在 `credentials.env` 共用，渠道开关仍使用 `[notifications.email/telegram] enabled`。
+
+每个账号、每个邮箱及 TG 绑定分别记录发送状态和 TG 分段进度；一个收件地址失败不影响其他地址，已成功的地址不重发，结果不确定的投递停止自动重试。任务准备发送时冻结收件地址与订阅快照；取消账号、地址、订阅或更改对译偏好会取消受影响的延迟重试，以免旧内容误投。新配置用于之后的任务，不回溯补发历史。账号模式会停止旧全局队列的发送；`mode = "legacy"` 可显式回到旧模式。
+
+`.venv/bin/python -m newspaper.cli accounts` 检查生效账号、收件数量及订阅，不输出收件地址；`check-config` 校验 TOML，`status` 查看按账号的投递状态。
 
 `[homepage] mode = "groups"` 直接展示一级板块正文，`groups` 列表控制显示范围和顺序。`mode = "sections"` 配合 `sections` 列表展示指定子板块；`mode = "index"` 仅显示各期链接。首页按子板块组合最新保留的一期，因此周报/月报会显示到下一次更新。每个板块带原期日期及链接；最新一期为空时不会复活更旧新闻。
 

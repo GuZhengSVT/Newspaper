@@ -17,6 +17,9 @@ fi
 if [ ! -f /etc/newspaper/credentials.env ]; then
   install -o root -g newspaper -m 640 .env.example /etc/newspaper/credentials.env
 fi
+if [ ! -f /etc/newspaper/accounts.local.toml ]; then
+  install -o root -g newspaper -m 640 accounts.example.toml /etc/newspaper/accounts.local.toml
+fi
 install -m 644 deploy/newspaper*.service deploy/newspaper*.timer /etc/systemd/system/
 install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
 systemctl daemon-reload

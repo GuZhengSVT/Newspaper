@@ -19,6 +19,9 @@ def normalize(text: str) -> str:
 
 def validate_report(doc: dict, settings: Settings, sources: list[dict], history: list[dict], window: dict) -> None:
     VALIDATOR.validate(doc)
+    from .translation import validate_bilingual
+    for section in doc['sections']:
+        for article in section['articles']:validate_bilingual(article)
     if doc["date"] != window["date"] or any(doc[k] != window[k] for k in ["window_start", "window_end"]):
         raise ValueError("Report date/window differs from the scheduled edition")
     expected = [(s["id"], s["name"]) for s in settings.sections]

@@ -18,9 +18,10 @@ make check test
 cp config.example.toml config.local.toml
 cp project.example.toml project.local.toml
 cp .env.example credentials.env
+cp accounts.example.toml accounts.local.toml
 ```
 
-Edit all three files before generating news. Select an OpenAI-compatible model endpoint and model ID in `config.local.toml`, and put its key in `credentials.env`. No provider or model subscription is included. The pinned DeepSeek Harness and `dsh-free-search` dependencies provide search/retrieval; the default bounded mode plans queries, then calls plugin engines directly. Search availability is recorded, rather than assumed.
+Edit the configuration files before generating news. Select an OpenAI-compatible model endpoint and model ID in `config.local.toml`, and put its key in `credentials.env`. No provider or model subscription is included. The pinned DeepSeek Harness and `dsh-free-search` dependencies provide search/retrieval; the default bounded mode plans queries, then calls plugin engines directly. Search availability is recorded, rather than assumed.
 
 ```bash
 export NEWSPAPER_CONFIG="$PWD/config.local.toml"
@@ -39,13 +40,14 @@ export NEWSPAPER_WEB=/tmp/newspaper-web
 
 For an immediate end-to-end run, list all enabled delivery tasks with `schedule --manual`, then invoke `run --manual --task TASK_ID` one task at a time. Each command uses the existing retrieval, editing, verification, publication and notification pipeline. Manual issues have separate publication IDs and look back one configured period from the invocation time, without changing normal schedules or start dates. An explicit timezone-aware `--cutoff` can give multiple manual runs the same cutoff earlier that day.
 
-## Three configuration files
+## Configuration files
 
 | File | Purpose | Publish to Git? |
 | --- | --- | --- |
 | `project.local.toml` | Groups, sections, searches, prompts, filters, sources, calendar and homepage | No |
 | `config.local.toml` | Model endpoint, paths, retrieval budgets, notification switches; references `project_file` | No |
 | `credentials.env` | Model key, SMTP account/recipients, Telegram token/chat | No |
+| `accounts.local.toml` | Private administrator-managed accounts, destinations, subscriptions and bilingual preferences | No |
 
 The complete editable project template is [project.example.toml](project.example.toml). `project_file` is resolved relative to the runtime config; prompt file paths are resolved relative to the project file. Local configuration filenames are ignored by Git. Keep generated news and databases outside the checkout.
 
@@ -101,6 +103,20 @@ Enable email/Telegram in runtime configuration. Credential variable names are in
 Each article may include one externally hosted image in HTML, Markdown, email and Telegram. Candidates must be embedded in a cited source page with an informative publisher description. A separate editorial pass selects only images depicting the same subject and event; uncertain matches are omitted. The verifier checks public HTTPS redirects, download limits, successful decoding, dimensions, aspect ratio and image detail. Logos, advertisements, thumbnails and blank or strongly blurred placeholders are excluded. Captions preserve illustration/archive qualifiers and link to the source. Optional image failures leave verified text intact; binary images are not retained. The `batch` section field only groups topics in the alternative collection path; bounded retrieval and notification grouping do not use it.
 
 ## Homepage and feeds
+
+With `[translation] enabled = true`, approved Chinese stories receive English headlines and sentence translations followed by independent translation review before publication. Original Chinese sentences are stored unchanged alongside English in `article.bilingual`. Missing, reordered or rejected translations fail publication after a bounded correction attempt. Review aims for faithful, idiomatic English suitable for native Chinese speakers learning English, including accurate attribution, qualifications, numbers and terminology; automated review can still make mistakes.
+
+Each translated section has a persistent browser switch; homepage groups can also switch all their sections together. Reading uses **one English paragraph followed by its Chinese paragraph**, with sentences aligned in order within each pair and the original paragraph boundaries preserved. English is generated during news production, never on a reader's request. Chinese-only reading remains the default. The `translate` CLI command backfills retained reports and rebuilds the site without changing their dates or facts, or sending notifications; already translated articles are skipped.
+
+### Private notification accounts
+
+Set the runtime `accounts_file` to a private TOML file (relative to the runtime config) and `[notifications] mode = "accounts"`. Copy [accounts.example.toml](accounts.example.toml); the administrator edits this file, with no public registration, login or subscription API. Keep it outside Git, readable only by the administrator and service account (`0640` in the VPS installer).
+
+An account has a unique `id`, optional `name/enabled`, an `emails` array and at most one optional numeric-string `telegram_chat_id`. The Telegram user must first start the configured bot. `subscriptions = [{ section = "research", bilingual = true }, { section = "culture" }]` subscribes only to those group or section IDs. Specific section rules override groups, which override `*`. `[notifications.defaults] subscriptions = ["*"]` and `bilingual = false` supply defaults: omitted subscriptions inherit the default scope, `[]` subscribes to nothing, and omitted bilingual flags inherit the default. Publication/delivery times retain the existing global→group→section schedule inheritance; disabled sections and `notify = false` remain excluded.
+
+Every bound destination receives only that account's selected sections; selected bilingual sections use the same paired paragraphs as the website. A browser's reading switch does not change the administrator's account preferences. Missing destinations never fall back to another account or global recipient. SMTP credentials and Bot Token remain shared transport secrets, and channel enable flags still apply.
+
+Delivery status and Telegram progress are isolated per account and destination. Successful destinations are not resent; ambiguous acceptance stops automatic retry. Recipients and preferences are frozen when a completed task becomes ready. Revoking an account, address or subscription, or changing a bilingual preference, cancels affected delayed retries rather than sending stale content. New settings apply to future tasks without backfilling previous notifications. Account mode stops legacy global-queue delivery; `mode = "legacy"` explicitly restores the old behavior. `accounts` prints effective subscriptions and destination counts without addresses; `check-config` validates files, and `status` reports account delivery states.
 
 `[homepage] mode = "groups"` directly shows each selected first-level group's articles. `groups = ["research", "culture"]` controls inclusion and order. `mode = "sections"` with a `sections` list shows selected children instead; `mode = "index"` shows publication links. The homepage combines the latest retained issue for each section, so weekly/monthly content remains available between updates. Each section links to its issue date and full report; empty latest issues do not revive old articles.
 

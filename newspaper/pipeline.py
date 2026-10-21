@@ -101,6 +101,11 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
             raise ValueError('No verified originals in saved edition; refusing a no-news success')
         window = {k: doc[k] for k in ["date", "window_start", "window_end"]}
         validate_report(doc, settings, evidence["sources"], store.history(edition.get("task_id")), window)
+        if settings.values.get('translation',{}).get('enabled',False):
+            from .translation import translate
+            translate(doc,Model(settings))
+            atomic_json(settings.data / 'editions' / key / 'report.json',doc)
+            (settings.data / 'editions' / key / 'report.md').write_text(markdown(doc,settings))
         build(store.settings, store)
         store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
         store.db.execute("INSERT INTO runs(day,started_at,finished_at,status,metrics) VALUES(?,?,?,'published',?)",
@@ -201,6 +206,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 for section in doc['sections']:
                     for article in section['articles']:
                         article.pop('image',None)  # Only the optional source-bound illustration stage may add images.
+                        article.pop('bilingual',None)  # Only the separately reviewed translation stage may add English.
                         try:
                             moment = datetime.fromisoformat(article['published_at'])
                             if moment.tzinfo is not None:article['published_at'] = moment.astimezone(TZ).isoformat()
@@ -359,6 +365,9 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 raise ValueError('Report exhausted bounded validation and review retries')
             from .images import illustrate
             illustrate(doc, contexts, client)
+            if settings.values.get('translation',{}).get('enabled',False):
+                from .translation import translate
+                metrics['translated_articles'] = translate(doc,client)
             validate_report(doc, settings, contexts, history, window)
             directory = settings.data / "editions" / key
             directory.mkdir(parents=True, exist_ok=True)

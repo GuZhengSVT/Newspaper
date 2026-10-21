@@ -362,6 +362,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_private_project_file_is_loaded_and_validated_separately(self):
         (self.root/'project.local.toml').write_text((ROOT/'project.example.toml').read_text())
+        (self.root/'accounts.local.toml').write_text((ROOT/'accounts.example.toml').read_text())
         runtime=(ROOT/'config.example.toml').read_text().replace('/var/lib/newspaper',str(self.root/'separate-data')).replace('/srv/newspaper',str(self.root/'separate-web'))
         path=self.root/'runtime.toml';path.write_text(runtime)
         with patch.dict('os.environ',{'NEWSPAPER_CREDENTIALS':str(self.root/'no-credentials')}):s=Settings.load(str(path))

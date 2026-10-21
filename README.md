@@ -8,7 +8,16 @@ Topics, sources, prompts and provider credentials belong to each installation. T
 
 ## Install
 
-Requires Python 3.11+, Node 22.13+, and systemd/Caddy for the included VPS deployment.
+Requires Python 3.11+, Node 22.19+, and systemd/Caddy for the included VPS deployment.
+
+The repository distributes application code, templates, static assets, prompts, tests and configuration examples. Installed dependencies are excluded from Git: `node_modules/` and `.venv/` are local installation directories and are not included in a clone or source download.
+
+| Dependencies | Declaration | Locked installation versions |
+| --- | --- | --- |
+| Python: httpx, Jinja2, jsonschema, markdown-it-py | `pyproject.toml` | `requirements.lock` |
+| Node.js: DeepSeek Harness, dsh-free-search, sharp, undici, proxy-agent and supporting packages | `package.json` | `package-lock.json` |
+
+`make install` creates the Python virtual environment and downloads both sets of dependencies from the lock files. Keep the manifests and lock files in Git so installations are reproducible. A source-publication checkout does not need installed dependencies to commit or push code; install them there only when running local checks or the application.
 
 ```bash
 git clone https://github.com/GuZhengSVT/Newspaper.git

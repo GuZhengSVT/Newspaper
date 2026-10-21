@@ -4,15 +4,13 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-import test_newspaper as fixtures
 from newspaper.config import Settings
 from newspaper.bounded import research, plan_problems, SearchPlanError
 from newspaper.discovery import discover, recent_links
 
+from fixtures import NewspaperCase
 
-class SourceFirstTests(unittest.TestCase):
-    setUp=fixtures.NewspaperTests.setUp
-    tearDown=fixtures.NewspaperTests.tearDown
+class SourceFirstTests(NewspaperCase):
 
     def index(self, sources=None, **kwargs):
         return {'section_id':'fixture','index_url':'https://example.test/feed','index_status':'links',

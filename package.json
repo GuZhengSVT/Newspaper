@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": "26.12.1"
   },
   "scripts": {
     "test": "node --test tests/search.test.mjs tests/image.test.mjs"
@@ -39,9 +39,16 @@
     "@deepseek-ai/dsh-util-workspace-path": "0.2.1-rc.2",
     "@deepseek-ai/dsh-workflow": "0.2.1-rc.2",
     "@deepseek-ai/schemastery": "3.18.5",
-    "dsh-free-search": "0.9.5",
-    "proxy-agent": "6.5.0",
+    "dsh-free-search": "0.9.11",
+    "proxy-agent": "8.0.2",
     "sharp": "0.35.5",
-    "undici": "8.11.2"
+    "undici": "8.12.3"
+  },
+  "overrides": {
+    "basic-ftp": "6.2.3",
+    "fflate": "0.8.3",
+    "@deepseek-ai/dsh-mcp-client": {
+      "@modelcontextprotocol/client": "2.3.1"
+    }
   }
 }

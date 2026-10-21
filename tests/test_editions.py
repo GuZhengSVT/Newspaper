@@ -6,7 +6,6 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import test_newspaper as fixtures
 from newspaper.config import Settings
 from newspaper.evidence import selected_sources, used_evidence, validate_selection
 from newspaper.pipeline import generate, apply_repair, keep_approved, filter_invalid_articles
@@ -16,28 +15,9 @@ from newspaper.retention import clean
 from newspaper.storage import edition_key, expiry
 from newspaper.validation import validate_report
 
+from fixtures import NewspaperCase
 
-class EditionTests(unittest.TestCase):
-    setUp = fixtures.NewspaperTests.setUp
-    tearDown = fixtures.NewspaperTests.tearDown
-
-    def issue(self, slug):
-        doc = copy.deepcopy(self.doc)
-        doc.update(schema_version=2, edition=slug, title=slug)
-        a = doc['sections'][0]['articles'][0]
-        a.update(importance='重要', reliability='A', entities=['Fixture Product'], verification='official_statement')
-        for f in a['facts']:f.update(kind='fact',verification='official_statement')
-        return doc
-
-    def save(self, doc):
-        key = edition_key(doc)
-        directory = self.settings.data / 'editions' / key
-        directory.mkdir(parents=True)
-        (directory / 'report.json').write_text(json.dumps(doc))
-        (directory / 'report.md').write_text(markdown(doc))
-        self.store.add(doc)
-        self.store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
-        self.store.db.commit()
+class EditionTests(NewspaperCase):
 
     def test_same_date_two_issues_build_and_expire(self):
         for slug in ['research','culture']:
@@ -104,10 +84,10 @@ class EditionTests(unittest.TestCase):
             self.store.db.execute("UPDATE editions SET status='ready' WHERE day=?",(key,))
         self.store.db.commit()
         with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
-             patch('newspaper.pipeline.Model') as model:
+             patch('newspaper.pipeline.Model') as model,patch('newspaper.pipeline.deliver') as sender:
             result=generate(settings,self.store,notify=False)
         self.assertEqual(result['state'],'published');model.assert_not_called()
-        self.assertTrue(all(e['resumed'] for e in result['editions']))
+        self.assertTrue(all(e['resumed'] for e in result['editions']));sender.assert_not_called()
         for slug in ['research','culture']:
             self.assertTrue(self.store.published(self.day+'/'+slug))
 
@@ -137,7 +117,11 @@ class EditionTests(unittest.TestCase):
         with patch('newspaper.pipeline.utcnow',return_value=moment),patch('newspaper.pipeline.gather',return_value=collection), \
              patch('newspaper.pipeline.Model.request',side_effect=[copy.deepcopy(self.doc),{'ok':True}]), \
              patch('newspaper.pipeline.deliver') as sender:
-            generate(self.settings,self.store,notify=False)
+            result=generate(self.settings,self.store,notify=False)
+        self.assertEqual(result['state'],'published')
+        self.assertTrue(self.store.published(self.day))
+        self.assertTrue((self.settings.web/'current/daily'/self.day/'index.html').is_file())
+        self.assertEqual(list((self.settings.data/'tmp').iterdir()),[])
         sender.assert_not_called()
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM deliveries').fetchone()[0],0)
         directory=self.settings.data/'editions'/self.day
@@ -266,11 +250,14 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(validate_selection({'candidates':[candidate]},self.settings,[self.source],2),[])
 
     def test_failed_rebuild_purges_unserved_release_indexes(self):
+        self.save(self.issue('culture'));build(self.settings,self.store)
         stale=self.settings.web/'releases/stale'
         stale.mkdir();(stale/'feed.xml').write_text('expired news summary')
         with patch('newspaper.retention.build',side_effect=OSError('renderer unavailable')):
-            with self.assertRaises(RuntimeError):clean(self.settings,self.store)
+            with self.assertRaises(RuntimeError):clean(self.settings,self.store,expiry(self.day))
         self.assertFalse(stale.exists())
+        self.assertFalse((self.settings.web/'current/archive').exists())
+        self.assertFalse((self.settings.web/'current/daily'/self.day).exists())
 
     def test_candidate_cap_prioritizes_major_events(self):
         base={'event_key':'e','entities':['thing'],'section_id':'fixture','importance':'重要','source_ids':['s1']}
@@ -330,18 +317,6 @@ class EditionTests(unittest.TestCase):
         build(self.settings,self.store)
         self.assertTrue((self.settings.web/'current/daily'/self.day/'index.html').exists())
         self.assertTrue((self.settings.web/'current/daily'/self.day/'culture/index.html').exists())
-
-    def test_reviewed_ready_edition_resumes_without_calling_model_or_push(self):
-        doc=self.issue('culture');self.save(doc)
-        key=edition_key(doc)
-        evidence={'sources':[self.source]}
-        (self.settings.data/'editions'/key/'evidence.json').write_text(json.dumps(evidence))
-        self.store.db.execute("UPDATE editions SET status='ready' WHERE day=?",(key,));self.store.db.commit()
-        from newspaper.pipeline import generate_edition
-        with patch('newspaper.pipeline.Model') as model,patch('newspaper.pipeline.deliver') as sender:
-            result=generate_edition(self.settings,self.store,{'id':'culture'}, {},False)
-        model.assert_not_called();sender.assert_not_called()
-        self.assertTrue(result['resumed']);self.assertTrue(self.store.published(key))
 
     def test_invalid_quote_excludes_only_its_article_before_ai_review(self):
         doc=self.issue('culture');good=doc['sections'][0]['articles'][0]

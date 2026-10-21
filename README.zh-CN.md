@@ -8,7 +8,7 @@
 
 ## 安装与配置
 
-需要 Python 3.11+、Node 22.19+；附带的 VPS 部署还需要 systemd、Caddy。
+需要 Python 3.11+、Node 26.12.1（统一锁定在 `.node-version`）；附带的 VPS 部署还需要 systemd、Caddy。
 
 仓库提供程序代码、模板、静态资源、提示词、测试和配置示例。安装后的依赖不提交到 Git：`node_modules/` 和 `.venv/` 是本地安装目录，克隆仓库或下载源码时不会包含它们。
 
@@ -16,6 +16,8 @@
 | --- | --- | --- |
 | Python：httpx、Jinja2、jsonschema、markdown-it-py | `pyproject.toml` | `requirements.lock` |
 | Node.js：DeepSeek Harness、dsh-free-search、sharp、undici、proxy-agent 及配套依赖 | `package.json` | `package-lock.json` |
+
+先安装 `.node-version` 指定的 Node，CI 和 `package.json` 使用同一版本。
 
 执行 `make install` 会创建 Python 虚拟环境，并依据锁文件下载两套依赖。声明文件和锁文件保留在 Git 中，保证安装版本可复现。只用于提交和推送源码的发布副本无需安装依赖；需要在其中运行检查或程序时再安装。
 

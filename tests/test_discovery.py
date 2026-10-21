@@ -5,8 +5,6 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-import test_newspaper as fixtures
-import test_editions as editions
 from datetime import datetime
 from newspaper.config import Settings
 from newspaper.bounded import research
@@ -16,10 +14,9 @@ from newspaper.research import fetch_source, publication_time, visible_publicati
 from newspaper.style import style_issues, compact_articles
 from newspaper.reading import report_view
 
+from fixtures import NewspaperCase
 
-class DiscoveryTests(unittest.TestCase):
-    setUp=fixtures.NewspaperTests.setUp
-    tearDown=fixtures.NewspaperTests.tearDown
+class DiscoveryTests(NewspaperCase):
 
     def test_publisher_directory_discovers_new_article_without_search_indexing(self):
         page=f'''<a href="/about">About this publisher</a>
@@ -118,7 +115,7 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(post.call_count,4)
 
     def test_bad_quotation_gets_one_scoped_repair_before_exclusion(self):
-        doc=editions.EditionTests.issue(self,'culture')
+        doc=self.issue('culture')
         article=doc['sections'][0]['articles'][0];key=article['event_key']
         article['candidate_id']='c1'
         bad=copy.deepcopy(doc);bad['sections'][0]['articles'][0]['facts'][0]['evidence'][0]['quote']='Absent quote'
@@ -139,7 +136,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in model.call_args_list],['edit','repair','review'])
 
     def test_all_articles_needing_correction_receive_a_final_scoped_round(self):
-        doc=editions.EditionTests.issue(self,'culture');article=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');article=doc['sections'][0]['articles'][0]
         key=article['event_key'];article['candidate_id']='c1'
         replacement=copy.deepcopy(article);replacement.pop('candidate_id')
         patch_doc={'replacements':[{'section_id':'fixture','event_key':key,'article':replacement}],
@@ -160,7 +157,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in model.call_args_list],['edit','review','repair','review','repair','review'])
 
     def test_global_affected_list_cannot_rewrite_an_approved_article(self):
-        doc=editions.EditionTests.issue(self,'culture');one=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');one=doc['sections'][0]['articles'][0]
         one['candidate_id']='c1';two=copy.deepcopy(one);two.update(event_key='fixture|second|event',candidate_id='c2')
         doc['sections'][0]['articles'].append(two);keys=[one['event_key'],two['event_key']]
         candidates=[{'event_key':k,'entities':['Fixture Product'],'section_id':'fixture','importance':'重要',
@@ -231,7 +228,7 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):restore_event_keys(doc,candidates)
 
     def test_format_retry_preserves_a_separate_semantic_repair_round(self):
-        doc=editions.EditionTests.issue(self,'culture');original=copy.deepcopy(doc)
+        doc=self.issue('culture');original=copy.deepcopy(doc)
         bad=copy.deepcopy(doc);bad['sections'][0]['id']='unconfigured'
         article=doc['sections'][0]['articles'][0];key=article['event_key']
         article.update(candidate_id='c1',event_key='model-reworded-key')
@@ -256,7 +253,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotIn('candidate_id',final)
 
     def test_rejected_empty_edition_is_not_published_as_a_no_news_success(self):
-        doc=editions.EditionTests.issue(self,'culture');doc['sections'][0]['articles']=[]
+        doc=self.issue('culture');doc['sections'][0]['articles']=[]
         doc['sections'][0]['empty_reason']='No verified articles'
         rejection={'ok':False,'summary_ok':False,'problems':['Insufficient current coverage'],'article_reviews':[]}
         settings=Settings({**self.settings.values,'editions':[{'id':'culture','name':'Culture','sections':['fixture']}],
@@ -269,7 +266,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(self.store.published(self.day+'/culture'))
 
     def test_short_claims_are_grouped_for_reading_instead_of_excluding_the_news(self):
-        doc=editions.EditionTests.issue(self,'culture');article=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');article=doc['sections'][0]['articles'][0]
         article['facts']=[{**copy.deepcopy(article['facts'][0]),'text':f'合成测试事实{i}。'} for i in range(7)]
         self.assertEqual(style_issues(doc),[])
         view=report_view(doc,self.day+'/culture')['sections'][0]['articles'][0]
@@ -277,7 +274,7 @@ class DiscoveryTests(unittest.TestCase):
         for i in range(7):self.assertIn(f'合成测试事实{i}。',''.join(view['paragraphs']))
 
     def test_compaction_cannot_replace_evidence_or_verification(self):
-        doc=editions.EditionTests.issue(self,'culture');article=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');article=doc['sections'][0]['articles'][0]
         original=copy.deepcopy(doc)
         patch={'articles':[{'event_key':article['event_key'],'facts':[{
             'index':0,'text':'简洁的合成事实','verification':'single_source','evidence':[]}]}]}

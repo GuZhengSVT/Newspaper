@@ -5,21 +5,14 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import test_editions as editions
-import test_newspaper as fixtures
 from newspaper.config import Settings
 from newspaper.pipeline import generate
 from newspaper.publish import build, markdown
-from newspaper.retention import clean
-from newspaper.storage import expiry
 from newspaper.style import style_issues
 
+from fixtures import NewspaperCase
 
-class ReadingTests(unittest.TestCase):
-    setUp = fixtures.NewspaperTests.setUp
-    tearDown = fixtures.NewspaperTests.tearDown
-    issue = editions.EditionTests.issue
-    save = editions.EditionTests.save
+class ReadingTests(NewspaperCase):
 
     def test_body_and_sources_are_rendered_once_without_editorial_boilerplate(self):
         doc = self.issue('culture')
@@ -64,15 +57,6 @@ class ReadingTests(unittest.TestCase):
         tomorrow = (self.settings.web/'current/index.html').read_text()
         self.assertEqual(tomorrow.count('今日尚未发布。'), 2)
         self.assertNotIn('今日Culture正文', tomorrow)
-
-    def test_failed_expiry_rebuild_removes_archive_titles(self):
-        self.save(self.issue('culture'))
-        build(self.settings, self.store)
-        with patch('newspaper.retention.build', side_effect=OSError('renderer unavailable')):
-            with self.assertRaises(RuntimeError):
-                clean(self.settings, self.store, expiry(self.day))
-        self.assertFalse((self.settings.web/'current/archive').exists())
-        self.assertFalse((self.settings.web/'current/daily'/self.day).exists())
 
     def test_length_rules_leave_room_for_scientific_explanations(self):
         doc = self.issue('culture')

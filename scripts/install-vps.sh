@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd /opt/Newspaper
+make check-node
 if ! id newspaper >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/newspaper --create-home --shell /usr/sbin/nologin newspaper
 fi

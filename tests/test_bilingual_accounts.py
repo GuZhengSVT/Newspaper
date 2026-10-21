@@ -6,8 +6,6 @@ import unittest
 from datetime import datetime
 from unittest.mock import Mock, patch
 
-import test_newspaper as fixtures
-import test_project as project
 from newspaper.accounts import accounts
 from newspaper.batches import prepare_batches, finish_batches, deliver_batches
 from newspaper.config import Settings
@@ -18,10 +16,9 @@ from newspaper.schedule import jobs
 from newspaper.storage import Store
 from newspaper.translation import translate, sentence_units, validate_bilingual
 
+from fixtures import NewspaperCase, ProjectCase
 
-class TranslationTests(unittest.TestCase):
-    setUp=fixtures.NewspaperTests.setUp
-    tearDown=fixtures.NewspaperTests.tearDown
+class TranslationTests(NewspaperCase):
 
     def bilingual(self, article=None):
         article=article or self.doc['sections'][0]['articles'][0]
@@ -39,7 +36,7 @@ class TranslationTests(unittest.TestCase):
         self.assertIn('任务已经启动。结果仍需核实。</p>',message['html'])
         message_cn=news_message(self.settings,[(self.day,self.doc)],'News')
         self.assertNotIn('The mission',str(message_cn))
-        fixtures.NewspaperTests.add(self);build(self.settings,self.store)
+        self.add();build(self.settings,self.store)
         page=(self.settings.web/'current/daily'/self.day/'index.html').read_text()
         self.assertIn('data-section="fixture"',page)
         self.assertIn('The mission has begun. The results still need verification.</p><p lang="zh-CN">任务已经启动。结果仍需核实。',page)
@@ -91,8 +88,11 @@ class TranslationTests(unittest.TestCase):
         review={'ok':True,'title_ok':True,'sentences':[{'id':0,'ok':True,'problems':[]}]}
         with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
              patch('newspaper.pipeline.gather',return_value={'sources':[self.source]}), \
-             patch('newspaper.pipeline.Model.request',side_effect=[self.doc,{'ok':True},draft,review]) as model:
-            self.assertEqual(generate(self.settings,self.store,notify=False)['state'],'published')
+             patch('newspaper.pipeline.Model.request',side_effect=[self.doc,{'ok':True},draft,review]) as model, \
+             patch('newspaper.notify.readiness',return_value=False):
+            result=generate(self.settings,self.store,notify=True)
+        self.assertEqual(result['state'],'published')
+        self.assertEqual(result['notifications']['unconfigured'],2)
         self.assertEqual([c.args[0] for c in model.call_args_list],['edit','review','translate','translate-review'])
         self.assertIn('bilingual',self.store.document(self.day)['sections'][0]['articles'][0])
 
@@ -107,10 +107,7 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute('select count(*) from deliveries').fetchone()[0],0)
 
 
-class AccountTests(unittest.TestCase):
-    setUp=project.ProjectTests.setUp
-    tearDown=project.ProjectTests.tearDown
-    save=project.ProjectTests.save
+class AccountTests(ProjectCase):
 
     def setup_accounts(self):
         settings=self.make_settings()

@@ -9,9 +9,6 @@ from unittest.mock import Mock, patch
 
 import httpx
 
-import test_newspaper as fixtures
-import test_project as project
-import test_editions as editions
 from newspaper.config import Settings
 from newspaper.batches import deliver_batches, finish_batches, prepare_batches
 from newspaper.images import illustrate, source_images
@@ -22,10 +19,9 @@ from newspaper.validation import validate_report
 from newspaper.schedule import jobs
 from newspaper.pipeline import generate
 
+from fixtures import NewspaperCase, ProjectCase
 
-class ContentTests(unittest.TestCase):
-    setUp=fixtures.NewspaperTests.setUp
-    tearDown=fixtures.NewspaperTests.tearDown
+class ContentTests(NewspaperCase):
 
     def image(self):
         return {'url':'https://example.test/launch.jpg','caption':'合成测试发射图像',
@@ -72,7 +68,7 @@ class ContentTests(unittest.TestCase):
         article=self.doc['sections'][0]['articles'][0];article['image']=self.image()
         self.source['images']=[{'url':article['image']['url'],'description':'Synthetic mission launch photograph'}]
         validate_report(self.doc,self.settings,[self.source],[],self.window)
-        fixtures.NewspaperTests.add(self)
+        self.add()
         build(self.settings,self.store)
         page=(self.settings.web/'current/daily'/self.day/'index.html').read_text()
         self.assertIn('class="story-image"',page)
@@ -116,7 +112,7 @@ class ContentTests(unittest.TestCase):
         self.assertEqual(article['image'],self.image())
 
     def test_pipeline_adds_only_source_bound_image_after_fact_review(self):
-        doc=editions.EditionTests.issue(self,'culture');article=doc['sections'][0]['articles'][0]
+        doc=self.issue('culture');article=doc['sections'][0]['articles'][0]
         article['candidate_id']='c1'
         self.source['images']=[{'url':self.image()['url'],'description':'Synthetic mission launch photograph'}]
         candidate={'event_key':article['event_key'],'entities':['Fixture Product'],'section_id':'fixture',
@@ -137,7 +133,7 @@ class ContentTests(unittest.TestCase):
         self.assertIn('![合成测试发射图像]',(self.settings.web/'current/downloads'/self.day/'culture.md').read_text())
 
     def test_empty_issue_review_receives_original_evidence_instead_of_an_empty_bundle(self):
-        doc=editions.EditionTests.issue(self,'culture')
+        doc=self.issue('culture')
         doc['sections'][0].update(articles=[],empty_reason='原文复查后无合格候选')
         doc.update(summary='本期无合格新闻。',highlights=[])
         settings=Settings({**self.settings.values,'editions':[{'id':'culture','name':'Culture','sections':['fixture']}],
@@ -152,7 +148,7 @@ class ContentTests(unittest.TestCase):
             self.assertEqual(call.args[1]['sources'][0]['content'],self.source['content'])
 
     def test_empty_issue_retries_stale_candidate_review_without_restoring_filtered_articles(self):
-        doc=editions.EditionTests.issue(self,'culture')
+        doc=self.issue('culture')
         old=copy.deepcopy(doc['sections'][0]['articles'][0])
         old['importance']='重要'
         doc['sections'][0]['articles']=[old]
@@ -211,10 +207,7 @@ class ContentTests(unittest.TestCase):
         self.assertEqual(progress,[1,2,3])
 
 
-class MultipartRetryTests(unittest.TestCase):
-    setUp=project.ProjectTests.setUp
-    tearDown=project.ProjectTests.tearDown
-    save=project.ProjectTests.save
+class MultipartRetryTests(ProjectCase):
 
     def test_retry_resumes_after_last_acknowledged_part_after_restart(self):
         settings=self.make_settings();scheduled=jobs(settings,self.now)

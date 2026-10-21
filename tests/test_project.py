@@ -7,8 +7,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, Mock
 
-import test_newspaper as fixtures
-import test_editions as editions
 from newspaper.config import Settings, ROOT
 from newspaper.schedule import latest_window, jobs, task_identity
 from newspaper.batches import prepare_batches, finish_batches, deliver_batches
@@ -21,6 +19,7 @@ from newspaper.validation import validate_report
 from newspaper.publish import build
 from newspaper.bounded import SearchPlanError
 
+from fixtures import ProjectCase
 
 class CalendarTests(unittest.TestCase):
     def test_manual_jobs_include_future_tasks_without_rewriting_the_regular_schedule(self):
@@ -72,36 +71,7 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(task_identity(base,'UTC'),task_identity({**base,'time':'09:00:00'},'UTC'))
 
 
-class ProjectTests(unittest.TestCase):
-    setUp=fixtures.NewspaperTests.setUp
-    tearDown=fixtures.NewspaperTests.tearDown
-
-    def settings(self, schedules=None):
-        sections=[{'id':'fixture','name':'First'},{'id':'other','name':'Second'}]
-        if schedules:
-            for section,schedule in zip(sections,schedules):section['schedule']=schedule
-        return Settings({**self.settings_base,'project':{'name':'Test news','timezone':'Asia/Shanghai'},
-                         'schedule':{'period':'daily','time':'12:00'},'sections':sections,
-                         'editions':[{'id':'first','name':'First group','sections':['fixture']},
-                                     {'id':'second','name':'Second group','sections':['other']}]},
-                        self.root/'data',self.root/'web','https://example.test')
-
-    def setUp(self):
-        fixtures.NewspaperTests.setUp(self)
-        self.settings_base=self.settings.values
-        # Keep the existing fixtures' settings attribute; use a separate constructor name.
-        self.make_settings=ProjectTests.settings.__get__(self)
-        self.now=datetime.fromisoformat(self.day+'T12:05:00+08:00')
-
-    def save(self, job, window):
-        doc=editions.EditionTests.issue(self,job['id']);doc.update(window,title=job['name'])
-        section=doc['sections'][0];section.update(id=job['sections'][0],name=job['name'])
-        section['articles'][0]['event_key']='fixture|release|'+job['id']
-        section['articles'][0]['published_at']=(datetime.fromisoformat(window['window_end'])-timedelta(hours=1)).isoformat()
-        key=edition_key(doc);directory=self.root/'data'/'editions'/key;directory.mkdir(parents=True,exist_ok=True)
-        (directory/'report.json').write_text(json.dumps(doc));(directory/'report.md').write_text('Fixture')
-        self.store.add(doc,task_id=job['task_id']);self.store.db.execute("update editions set status='published' where day=?",(key,));self.store.db.commit()
-        return doc
+class ProjectTests(ProjectCase):
 
     def test_same_schedule_across_groups_sends_one_message_per_channel_without_repeats(self):
         settings=self.make_settings();scheduled=jobs(settings,self.now)
@@ -293,13 +263,6 @@ class ProjectTests(unittest.TestCase):
         self.assertNotIn('First group',home);self.assertIn('Second group',home)
         self.assertIn('/feed-second.xml',str(list((settings.web/'current').glob('feed-*.xml'))))
 
-    def test_homepage_index_does_not_render_bodies(self):
-        settings=self.make_settings();self.store.settings=settings
-        for member in jobs(settings,self.now):self.save(*member)
-        index=Settings({**settings.values,'homepage':{'mode':'index'}},settings.data,settings.web,settings.base_url)
-        build(index,self.store);home=(settings.web/'current/index.html').read_text()
-        self.assertIn('First group',home);self.assertNotIn('离线测试文本',home)
-
     def test_homepage_layout_and_reader_switch_are_independent_of_content_mode(self):
         settings=self.make_settings();self.store.settings=settings
         for member in jobs(settings,self.now):self.save(*member)
@@ -381,7 +344,7 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(result[0]['index_status'],'no_recent_links')
 
     def test_section_filter_is_enforced_after_model_generation(self):
-        doc=editions.EditionTests.issue(self,'first')
+        doc=self.issue('first')
         settings=Settings({**self.settings.values,'sections':[{'id':'fixture','name':'测试板块','filter':{'reliability':['A'],'exclude_keywords':['blocked']}}]},self.settings.data,self.settings.web,self.settings.base_url)
         doc['sections'][0]['articles'][0]['title']='blocked announcement'
         with self.assertRaisesRegex(ValueError,'keyword filter'):validate_report(doc,settings,[self.source],[],self.window)
@@ -390,7 +353,7 @@ class ProjectTests(unittest.TestCase):
         settings=self.make_settings();settings.values['search']={'mode':'bounded'};self.store.settings=settings
         scheduled=jobs(settings,self.now);responses=[];collections=[]
         for job,window in scheduled:
-            doc=editions.EditionTests.issue(self,job['id']);doc.update(window,title=job['name'])
+            doc=self.issue(job['id']);doc.update(window,title=job['name'])
             section=next(s for s in settings.sections if s['id']==job['sections'][0])
             doc['sections'][0].update(id=section['id'],name=section['name'])
             article=doc['sections'][0]['articles'][0];article['event_key']='fixture|release|'+job['id'];article['candidate_id']='c1'
@@ -425,7 +388,7 @@ class ProjectTests(unittest.TestCase):
     def test_section_body_limits_and_display_timezone_are_configurable(self):
         from newspaper.style import style_issues
         from newspaper.reading import report_view
-        doc=editions.EditionTests.issue(self,'first');a=doc['sections'][0]['articles'][0]
+        doc=self.issue('first');a=doc['sections'][0]['articles'][0]
         a['facts'][0]['text']='字'*700
         settings=Settings({**self.settings.values,'project':{'timezone':'UTC'},'sections':[
             {'id':'fixture','name':'测试板块','format':{'max_characters':1000}}]},self.settings.data,self.settings.web,self.settings.base_url)

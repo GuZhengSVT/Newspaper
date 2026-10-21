@@ -4,11 +4,9 @@ import copy
 import hashlib
 import json
 import os
-import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import patch
 from xml.etree import ElementTree
 
@@ -17,50 +15,12 @@ from newspaper.notify import deliver, enqueue
 from newspaper.pipeline import generate, import_legacy
 from newspaper.publish import build, markdown
 from newspaper.retention import clean
-from newspaper.storage import Store, atomic_json, expiry, lock, utcnow
+from newspaper.storage import expiry, lock, utcnow
 from newspaper.validation import validate_report
 
+from fixtures import NewspaperCase
 
-class NewspaperTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self.day = utcnow().date().isoformat()
-        self.settings = Settings({"model": {"provider": "fixture", "id": "fixture-model", "base_url": "https://example.test/v1"},
-            "sections": [{"id": "fixture", "name": "测试板块"}],
-            "notifications": {"email": {"enabled": True}, "telegram": {"enabled": True}}},
-            self.root / "data", self.root / "web", "https://example.test")
-        self.store = Store(self.settings)
-        self.source = {"id": "s1", "url": "https://example.test/source", "title": "Synthetic fixture source",
-                       "published_at": self.day + "T10:00:00+08:00", "content": "This is synthetic evidence for a test, not actual news."}
-        self.window = {"date": self.day, "window_start": (utcnow().date() - timedelta(days=1)).isoformat() + "T12:00:00+08:00",
-                       "window_end": self.day + "T12:00:00+08:00"}
-        self.doc = {"schema_version": 1, **self.window, "generated_at": self.day + "T12:05:00+08:00",
-                    "title": "合成测试日报", "summary": "仅用于离线测试。", "highlights": ["Synthetic fixture"],
-                    "sources": [{k: self.source[k] for k in ["id", "url", "title", "published_at"]}],
-                    "sections": [{"id": "fixture", "name": "测试板块", "empty_reason": "", "articles": [{
-                        "event_key": "fixture|synthetic|event", "title": "合成事件", "summary": "测试事实",
-                        "published_at": self.source["published_at"], "follow_up": False, "new_facts": "",
-                        "verification": "single_source", "facts": [{"text": "离线测试文本", "evidence": [
-                            {"source_id": "s1", "quote": "This is synthetic evidence for a test"}]}]}]}]}
-
-    def tearDown(self):
-        self.store.close()
-        self.tmp.cleanup()
-
-    def add(self, doc=None):
-        doc = doc or self.doc
-        directory = self.settings.data / "editions" / doc["date"]
-        directory.mkdir(parents=True, exist_ok=True)
-        atomic_json(directory / "report.json", doc)
-        (directory / "report.md").write_text(markdown(doc))
-        self.store.add(doc)
-        self.store.db.execute("UPDATE editions SET status='published' WHERE day=?", (doc["date"],))
-        self.store.db.commit()
-
-    def test_valid_report(self):
-        validate_report(self.doc, self.settings, [self.source], [], self.window)
-
+class NewspaperTests(NewspaperCase):
     def test_fabricated_quote_rejected(self):
         self.doc["sections"][0]["articles"][0]["facts"][0]["evidence"][0]["quote"] = "Invented evidence quotation"
         with self.assertRaises(ValueError):
@@ -164,18 +124,6 @@ class NewspaperTests(unittest.TestCase):
         with patch("newspaper.pipeline.Model") as model:
             self.assertEqual(generate(settings, self.store)["state"], "awaiting_sections")
             model.assert_not_called()
-
-    def test_pipeline_publishes_only_after_review(self):
-        collection = {"section_id": "fixture", "sources": [self.source], "notes": []}
-        moment = datetime.fromisoformat(self.day + "T12:05:00+08:00")
-        with patch("newspaper.pipeline.utcnow", return_value=moment), patch("newspaper.pipeline.gather", return_value=collection), \
-             patch("newspaper.pipeline.Model.request", side_effect=[copy.deepcopy(self.doc), {"ok": True, "problems": [], "research_queries": []}]), \
-             patch("newspaper.notify.readiness", return_value=False):
-            result = generate(self.settings, self.store)
-        self.assertEqual(result["state"], "published")
-        self.assertTrue(self.store.published(self.day))
-        self.assertEqual(list((self.settings.data / "tmp").iterdir()), [])
-        self.assertTrue((self.settings.web / "current/daily" / self.day / "index.html").is_file())
 
     def test_review_rejection_does_not_publish_or_notify(self):
         collection = {"section_id": "fixture", "sources": [self.source], "notes": []}

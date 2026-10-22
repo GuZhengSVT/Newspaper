@@ -64,6 +64,40 @@ class ContentTests(NewspaperCase):
         self.assertEqual(mail.get_content_type(),'multipart/alternative')
         for body in mail.iter_parts():self.assertIn('离线测试文本',body.get_content())
 
+    def test_telegram_keeps_article_sources_before_its_photo_and_starts_next_article_fresh(self):
+        first=self.doc['sections'][0]['articles'][0]
+        first['image']=self.image()
+        second=copy.deepcopy(first)
+        second.pop('image')
+        second.update(title='第二条测试新闻',event_key='second-event')
+        second['facts'][0]['text']='第二条正文'
+        self.doc['sections'][0]['articles'].append(second)
+        message=news_message(self.settings,[(self.day,self.doc)],self.doc['title'])
+        parts=message['telegram']
+        self.assertEqual([part['method'] for part in parts],['sendMessage','sendPhoto','sendMessage','sendMessage'])
+        self.assertIn('离线测试文本',parts[0]['text'])
+        self.assertIn('来源：',parts[0]['text'])
+        self.assertNotIn('第二条正文',parts[0]['text'])
+        self.assertIn('图片来源</a>',parts[1]['caption'])
+        self.assertIn('第二条正文',parts[2]['text'])
+        self.assertIn('来源：',parts[2]['text'])
+        self.assertTrue(parts[-1]['text'].startswith('<b>网页阅读</b>'))
+        self.assertEqual(parts[0]['text'].count(self.doc['title']),1)
+
+    def test_email_escapes_headlines_and_corrections_and_keeps_all_story_text(self):
+        article=self.doc['sections'][0]['articles'][0]
+        article['title']='<script>headline</script> & "引号"'
+        article['facts'][0]['text']='正文 <tag> & 后续文字'
+        self.doc['title']='<img src=x onerror=bad>'
+        message=news_message(self.settings,[(self.day,self.doc)],self.doc['title'],notice='<script>更正</script>')
+        self.assertNotIn('<script>',message['html'])
+        self.assertNotIn('<img src=x',message['html'])
+        self.assertIn('&lt;script&gt;headline&lt;/script&gt;',message['html'])
+        self.assertIn('&lt;script&gt;更正&lt;/script&gt;',message['html'])
+        self.assertIn('正文 &lt;tag&gt; &amp; 后续文字',message['html'])
+        self.assertNotIn('<h2 ',message['html'])
+        self.assertIn('正文 <tag> & 后续文字',message['text'])
+
     def test_image_source_binding_and_all_reading_formats(self):
         article=self.doc['sections'][0]['articles'][0];article['image']=self.image()
         self.source['images']=[{'url':article['image']['url'],'description':'Synthetic mission launch photograph'}]

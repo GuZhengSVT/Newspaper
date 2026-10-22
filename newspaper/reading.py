@@ -60,8 +60,7 @@ def report_view(doc: dict, key: str, settings=None) -> dict:
                 'paragraphs': paragraphs, 'bilingual_paragraphs': paragraph_pairs(article,paragraphs) if article.get('bilingual') else [],
                 'references': list(references.values()),
                 'time': display_time(article['published_at'],timezone=timezone)})
-        sections.append({'id':section['id'],'name': section['name'], 'anchor': f'{prefix}-s{si}', 'articles': articles,
-                         'has_bilingual':all(a.get('bilingual') for a in articles)})
+        sections.append({'id':section['id'],'name': section['name'], 'anchor': f'{prefix}-s{si}', 'articles': articles})
     return {'key': key, 'date': doc['date'], 'title': doc['title'], 'sections': sections,
             'count': sum(len(s['articles']) for s in sections),
             'window': (display_time(doc['window_start'],timezone=timezone) + ' — ' + display_time(doc['window_end'],timezone=timezone))

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>{{ subject }}</title>
+  <style>
+    @media screen and (max-width: 600px) {
+      .mail-padding { padding: 20px 16px !important; }
+      .mail-masthead { font-size: 40px !important; }
+      .mail-subject { font-size: 24px !important; }
+      .mail-headline { font-size: 22px !important; }
+    }
+    @media (prefers-color-scheme: dark) {
+      .paper { background-color: #22221f !important; }
+      .ink { color: #e4e0d6 !important; }
+      .muted { color: #b4afa3 !important; }
+      .rule { border-color: #514e45 !important; }
+      .accent { color: #ddb09d !important; }
+    }
+  </style>
+</head>
+{% set latin = '"Times New Roman", "Liberation Serif", "Nimbus Roman", "Noto Serif", "DejaVu Serif"' %}
+{% set serif = latin ~ ', "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, serif' %}
+{% set sans = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif' %}
+{% set small = 'font-family:' ~ sans ~ ';font-size:12px;line-height:1.75;color:#6a665d;' %}
+<body class="paper ink" style="margin:0;padding:0;width:100%;background-color:#f7f4ec;color:#24231f;-webkit-text-size-adjust:100%;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" class="paper" style="width:100%;background-color:#f7f4ec;">
+<tr><td align="center">
+<!--[if mso]><table role="presentation" width="720" cellspacing="0" cellpadding="0" border="0"><tr><td><![endif]-->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:720px;margin:0 auto;table-layout:fixed;">
+<tr><td class="mail-padding ink" style="padding:32px 28px 40px;color:#24231f;font-family:{{ serif }};font-size:18px;line-height:1.9;font-variant-numeric:lining-nums proportional-nums;overflow-wrap:anywhere;word-wrap:break-word;">
+  <div class="mail-masthead ink" style="margin:0 0 20px;text-align:center;font-family:Georgia, {{ serif }};font-size:48px;line-height:1.15;letter-spacing:-1.5px;font-weight:700;color:#24231f;">{{ site_name }}</div>
+  <div class="rule" style="padding:16px 0 20px;border-top:3px double #24231f;border-bottom:1px solid #cdc7ba;">
+    <h1 class="mail-subject ink" style="margin:0;text-align:center;font-size:28px;line-height:1.5;font-weight:700;color:#24231f;">{{ subject }}</h1>
+  </div>
+  {% if notice %}<p class="accent rule" style="margin:20px 0;padding:10px 0;border-top:1px solid #cdc7ba;border-bottom:1px solid #cdc7ba;font-family:{{ sans }};font-size:14px;line-height:1.8;color:#6f302b;">{{ notice }}</p>{% endif %}
+  {% for view in views %}
+    {% if view.title != subject or views|length > 1 %}
+    <h2 class="ink rule" style="margin:30px 0 10px;padding:0 0 12px;border-bottom:3px double #24231f;font-size:26px;line-height:1.5;color:#24231f;">{{ view.title }}</h2>
+    {% endif %}
+    {% if view.window %}<p class="muted" style="margin:12px 0 24px;{{ small }}">报道时段：{{ view.window }}</p>{% endif %}
+    {% if not view.count %}<p class="muted" style="margin:24px 0;color:#6a665d;">本期未收录新闻。</p>{% endif %}
+    {% for section in view.sections %}
+      <h3 class="accent rule" style="margin:28px 0 22px;padding:8px 0;border-top:1px solid #cdc7ba;border-bottom:1px solid #cdc7ba;font-size:17px;line-height:1.6;letter-spacing:2px;color:#6f302b;">{{ section.name }}</h3>
+      {% for article in section.articles %}
+      <div class="rule" style="margin:0 0 26px;padding:0 0 24px;border-bottom:1px solid #cdc7ba;">
+        {% if section.bilingual %}<h4 lang="en" class="mail-headline ink" style="margin:0 0 12px;font-family:{{ latin }}, serif;font-size:25px;line-height:1.35;color:#24231f;">{{ article.bilingual.title_en }}</h4>{% endif %}
+        <h4 class="mail-headline ink" style="margin:0 0 12px;font-size:24px;line-height:1.55;font-weight:700;color:#24231f;">{{ article.title }}</h4>
+        <p class="muted" style="margin:0 0 20px;{{ small }}">{{ article.time }}{% if article.importance %} · {{ article.importance }} · 可靠性 {{ article.reliability }}{% endif %}{% if article.follow_up %} · 进展{% endif %}</p>
+        {% if section.bilingual %}
+          {% for pair in article.bilingual_paragraphs %}
+          <div style="margin:0 0 24px;">
+            <p lang="en" class="ink" style="margin:0 0 10px;font-family:{{ latin }}, serif;font-size:19px;line-height:1.75;color:#24231f;">{{ pair.en }}</p>
+            <p lang="zh-CN" class="muted" style="margin:0;font-size:18px;line-height:1.9;color:#6a665d;">{{ pair.zh }}</p>
+          </div>
+          {% endfor %}
+        {% else %}
+          {% for paragraph in article.paragraphs %}<p class="ink" style="margin:0 0 16px;text-indent:2em;font-size:18px;line-height:1.9;color:#24231f;">{{ paragraph }}</p>{% endfor %}
+        {% endif %}
+        {% if article.image %}
+        <div style="margin:20px 0 16px;">
+          <img src="{{ article.image.url }}" alt="{{ article.image.caption }}" width="{{ [article.image.width, 664]|min }}" border="0" style="display:block;width:100%;max-width:{{ [article.image.width, 664]|min }}px;height:auto;">
+          <p class="muted" style="margin:8px 0 0;{{ small }}">{{ article.image.caption }} · <a class="accent" href="{{ article.image.source_url }}" style="color:#6f302b;text-decoration:underline;">图片来源</a></p>
+        </div>
+        {% endif %}
+        {% if article.references %}<p class="muted" style="margin:18px 0 0;{{ small }}">来源：{% for reference in article.references %}<a class="accent" href="{{ reference.url }}" style="color:#6f302b;text-decoration:underline;">{{ reference.label }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+      </div>
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
+  <div class="rule" style="margin:32px 0 0;padding:16px 0 0;border-top:3px double #24231f;">
+    <p class="muted" style="margin:0 0 10px;{{ small }}font-weight:700;letter-spacing:2px;">网页阅读</p>
+    {% for title, url in links %}<p style="margin:8px 0;font-family:{{ sans }};font-size:14px;line-height:1.8;"><a class="accent" href="{{ url }}" style="color:#6f302b;text-decoration:underline;">{{ title }} →</a></p>{% endfor %}
+  </div>
+</td></tr></table>
+<!--[if mso]></td></tr></table><![endif]-->
+</td></tr></table>
+</body>
+</html>

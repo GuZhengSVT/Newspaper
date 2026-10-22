@@ -81,6 +81,20 @@ class TranslationTests(NewspaperCase):
         self.assertEqual(pairs[0]['en'],'Mission 0 has begun. Mission 1 has begun. Mission 2 has begun.')
         self.assertEqual(pairs[-1]['zh'],'6号任务已启动。')
 
+    def test_telegram_moves_a_fitting_translation_pair_together_to_the_next_message(self):
+        article=self.doc['sections'][0]['articles'][0]
+        first_en='Opening '+('word '*200)+'.'
+        second_en='Second '+('word '*180)+'.'
+        second_zh='下'*2000+'。'
+        article['facts']=[{'text':zh,'evidence':[]} for zh in ['首段。',second_zh]]
+        article['bilingual']={'title_en':'Synthetic headline','sentences':[
+            {'zh':'首段。','en':first_en},{'zh':second_zh,'en':second_en}]}
+        message=news_message(self.settings,[(self.day,self.doc)],'News',bilingual_sections={'fixture'})
+        matching=[part['text'] for part in message['telegram'] if second_en in part.get('text','')]
+        self.assertEqual(len(matching),1)
+        self.assertIn(second_zh,matching[0])
+        self.assertNotIn(first_en,matching[0])
+
     def test_production_translates_after_fact_review_and_saves_both_languages(self):
         from newspaper.pipeline import generate
         self.settings.values['translation']={'enabled':True}

@@ -1,10 +1,10 @@
+{% from 'icons.html' import icon %}
 {% macro articles(view, home=false) %}
 {% if view.count %}
 {% for section in view.sections %}
 <section class="news-section" id="{{ section.anchor }}" data-outline data-section="{{ section.id }}">
   {% if home %}<h3 class="section-title">{{ section.name }}</h3>{% else %}<h2 class="section-title">{{ section.name }}</h2>{% endif %}
   {% if section.issue_url %}<p class="story-meta">更新于 {{ section.issue_date }} · <a href="{{ section.issue_url }}">本期</a></p>{% endif %}
-  {% if section.has_bilingual %}<button class="bilingual-toggle" type="button" aria-pressed="false" hidden>中英对译：关闭</button>{% endif %}
   {% for article in section.articles %}
   <article class="story" id="{{ article.anchor }}" data-outline>
     {% if article.bilingual %}<p class="story-title bilingual-title" lang="en" hidden>{{ article.bilingual.title_en }}</p>{% endif %}
@@ -27,7 +27,7 @@
 {% macro contents(groups) %}
 <aside class="contents" aria-label="文章目录">
   <details id="contents-panel" open>
-    <summary>目录</summary>
+    <summary>{{ icon('list') }}<span>本版目录</span></summary>
     <nav aria-label="文章目录导航">
     <ul class="toc-list">
     {% for group in groups %}

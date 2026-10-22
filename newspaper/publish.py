@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -106,6 +107,8 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
     release = settings.web / "releases" / uuid.uuid4().hex
     release.mkdir(parents=True)
     env = Environment(loader=FileSystemLoader(ROOT / "templates"), autoescape=select_autoescape(["html", "xml"]))
+    env.globals['asset_version'] = hashlib.sha256(
+        (ROOT / 'static/site.css').read_bytes() + (ROOT / 'static/site.js').read_bytes()).hexdigest()[:12]
     env.globals['labels'] = LABELS
     env.globals['site_name'] = settings.values.get('project',{}).get('name','Newspaper')
     env.globals['timezone_label'] = settings.values.get('project',{}).get('timezone', 'Asia/Shanghai')

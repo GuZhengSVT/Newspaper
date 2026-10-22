@@ -4,8 +4,8 @@
 <div class="archive-page">
 <header class="page-heading"><h1>{{ archive_title }}</h1></header>
 <nav class="archive-filters" aria-label="往期分类"><a href="/archive/"{% if not archive_id %} aria-current="page"{% endif %}>全部</a>{% for edition in editions %}<a href="/archive/{{ edition.id }}/"{% if archive_id == edition.id %} aria-current="page"{% endif %}>{{ edition.label }}</a>{% endfor %}{% if has_legacy %}<a href="/archive/legacy/"{% if archive_id == 'legacy' %} aria-current="page"{% endif %}>历史存档</a>{% endif %}</nav>
-<label class="search"><span class="sr-only">搜索往期新闻</span><input id="search" type="search" placeholder="搜索标题或新闻内容" autocomplete="off"></label>
-<div id="archive-list">{% for entry in entries %}<article class="archive-entry" data-key="{{ entry.day }}"><time datetime="{{ entry.day[:10] }}">{{ entry.day[:10] }}</time><div><h2><a href="/daily/{{ entry.day }}/">{{ entry.title }}</a></h2></div><a class="download" href="/downloads/{{ entry.day }}.md" download aria-label="下载{{ entry.title }}">文档</a></article>{% endfor %}</div>
+<label class="search">{{ icon('search') }}<span class="sr-only">搜索往期新闻</span><input id="search" type="search" placeholder="搜索标题或新闻内容" autocomplete="off"></label>
+<div id="archive-list">{% for entry in entries %}<article class="archive-entry" data-key="{{ entry.day }}"><time datetime="{{ entry.day[:10] }}">{{ entry.day[:10] }}</time><div><h2><a href="/daily/{{ entry.day }}/">{{ entry.title }}</a></h2></div><a class="download" href="/downloads/{{ entry.day }}.md" download aria-label="下载{{ entry.title }}">{{ icon('download') }}<span>文档</span></a></article>{% endfor %}</div>
 <p id="search-empty" class="empty-state" role="status"{% if entries %} hidden{% endif %}>暂无匹配的日报。</p>
 </div>
 {% endblock %}

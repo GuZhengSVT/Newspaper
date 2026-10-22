@@ -8,7 +8,8 @@
   function applyTheme(theme) {
     root.dataset.theme = theme;
     if (themeButton) {
-      themeButton.textContent = theme === 'dark' ? '浅色' : '深色';
+      themeButton.hidden = false;
+      themeButton.querySelector('.theme-label').textContent = theme === 'dark' ? '浅色' : '深色';
       themeButton.setAttribute('aria-label', theme === 'dark' ? '切换为浅色配色' : '切换为深色配色');
     }
   }
@@ -21,61 +22,27 @@
   });
 
   const home = document.querySelector('#homepage');
-  const bilingualSections = [...document.querySelectorAll('.news-section[data-section]')];
-  const groupToggles = [...document.querySelectorAll('.group-bilingual-toggle')];
-  function refreshGroupToggles() {
-    groupToggles.forEach(toggle => {
-      const children = [...toggle.closest('.news-column').querySelectorAll('.news-section .bilingual-toggle')];
-      toggle.hidden = children.length === 0;
-      const count = children.filter(child => child.getAttribute('aria-pressed') === 'true').length;
-      const state = count === 0 ? 'false' : count === children.length ? 'true' : 'mixed';
-      toggle.setAttribute('aria-pressed', state);
-      toggle.textContent = `本板块中英对译：${state === 'mixed' ? '部分开启' : state === 'true' ? '开启' : '关闭'}`;
+  const bilingualToggle = document.querySelector('#bilingual-toggle');
+  const translatedStories = [...document.querySelectorAll('.story')].filter(story => story.querySelector('.bilingual-body'));
+  let bilingualEnabled = false;
+  try { bilingualEnabled = localStorage.getItem('newspaper-bilingual') === 'true'; } catch {}
+  function applyBilingual() {
+    translatedStories.forEach(story => {
+      story.querySelectorAll('.bilingual-body, .bilingual-title').forEach(node => { node.hidden = !bilingualEnabled; });
+      story.querySelectorAll('.chinese-body').forEach(node => { node.hidden = bilingualEnabled; });
     });
+    if (bilingualToggle) {
+      bilingualToggle.hidden = false;
+      bilingualToggle.setAttribute('aria-pressed', String(bilingualEnabled));
+      bilingualToggle.querySelector('.toggle-state').textContent = bilingualEnabled ? '开' : '关';
+    }
   }
-  function setBilingual(id, enabled) {
-    bilingualSections.filter(section => section.dataset.section === id).forEach(section => {
-      const toggle = section.querySelector('.bilingual-toggle');
-      if (!toggle) return;
-      toggle.hidden = false;
-      toggle.setAttribute('aria-pressed', String(enabled));
-      toggle.textContent = `中英对译：${enabled ? '开启' : '关闭'}`;
-      section.querySelectorAll('.bilingual-body, .bilingual-title').forEach(node => { node.hidden = !enabled; });
-      section.querySelectorAll('.chinese-body').forEach(node => { node.hidden = enabled; });
-    });
-  }
-  bilingualSections.forEach(section => {
-    const toggle = section.querySelector('.bilingual-toggle');
-    if (!toggle) return;
-    const id = section.dataset.section;
-    let enabled = false;
-    try {
-      const saved = localStorage.getItem('newspaper-bilingual-' + id);
-      const group = section.closest('[data-group]')?.dataset.group;
-      enabled = (saved ?? localStorage.getItem('newspaper-bilingual-group-' + group)) === 'true';
-    } catch {}
-    setBilingual(id, enabled);
-    toggle.addEventListener('click', () => {
-      const next = toggle.getAttribute('aria-pressed') !== 'true';
-      setBilingual(id, next);
-      try { localStorage.setItem('newspaper-bilingual-' + id, String(next)); } catch {}
-      refreshGroupToggles();
-    });
+  applyBilingual();
+  bilingualToggle?.addEventListener('click', () => {
+    bilingualEnabled = !bilingualEnabled;
+    applyBilingual();
+    try { localStorage.setItem('newspaper-bilingual', String(bilingualEnabled)); } catch {}
   });
-  groupToggles.forEach(toggle => {
-    toggle.addEventListener('click', () => {
-      const group = toggle.closest('.news-column');
-      const enabled = toggle.getAttribute('aria-pressed') !== 'true';
-      group.querySelectorAll('.news-section[data-section]').forEach(section => {
-        const id = section.dataset.section;
-        setBilingual(id, enabled);
-        try { localStorage.setItem('newspaper-bilingual-' + id, String(enabled)); } catch {}
-      });
-      try { localStorage.setItem('newspaper-bilingual-group-' + group.dataset.group, String(enabled)); } catch {}
-      refreshGroupToggles();
-    });
-  });
-  refreshGroupToggles();
   if (home) {
     const controls = home.querySelector('.home-controls');
     const tablist = home.querySelector('.home-tabs');

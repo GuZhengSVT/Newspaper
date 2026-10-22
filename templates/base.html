@@ -1,3 +1,4 @@
+{% from 'icons.html' import icon %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -9,18 +10,19 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="/assets/site.css">
-  <script defer src="/assets/site.js"></script>
+  <link rel="stylesheet" href="/assets/site.css?v={{ asset_version }}">
+  <script defer src="/assets/site.js?v={{ asset_version }}"></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳至正文</a>
   <header class="masthead">
     <a class="wordmark" href="/">{{ site_name }}</a>
     <nav class="site-nav" aria-label="主导航">
-      <a href="/archive/">往期新闻</a>
-      <a href="/feed.xml">订阅</a>
-      <a href="https://github.com/GuZhengSVT/Newspaper" target="_blank" rel="noopener noreferrer">GitHub</a>
-      <button id="theme" type="button" aria-label="切换深浅配色">配色</button>
+      <a href="/archive/">{{ icon('archive') }}<span>往期新闻</span></a>
+      <a href="/feed.xml">{{ icon('rss') }}<span>订阅</span></a>
+      <a href="https://github.com/GuZhengSVT/Newspaper" target="_blank" rel="noopener noreferrer">{{ icon('github') }}<span>GitHub</span></a>
+      <button id="bilingual-toggle" type="button" aria-pressed="false" hidden>{{ icon('translate') }}<span>中英对译</span><span class="toggle-state" aria-hidden="true">关</span></button>
+      <button id="theme" type="button" aria-label="切换深浅配色" hidden>{{ icon('sun') }}{{ icon('moon') }}<span class="theme-label">配色</span></button>
     </nav>
   </header>
   <main id="main-content">{% block body %}{% endblock %}</main>

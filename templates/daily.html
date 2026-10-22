@@ -2,8 +2,8 @@
 {% from 'parts.html' import articles, contents %}
 {% block title %}{{ doc.title }} · {{ site_name }}{% endblock %}
 {% block body %}
-<header class="page-heading"><a class="back" href="/archive/">往期新闻</a><h1>{{ doc.title }}</h1>
-<div class="document-tools"><a href="/downloads/{{ document_key }}.md" download>下载文档</a><a href="/feed{% if doc.edition %}-{{ doc.edition }}{% endif %}.xml">订阅</a>{% if view.window %}<span>报道时段：{{ view.window }}</span>{% endif %}</div></header>
+<header class="page-heading"><a class="back" href="/archive/">{{ icon('arrow-left') }} 往期新闻</a><h1>{{ doc.title }}</h1>
+<div class="document-tools"><a href="/downloads/{{ document_key }}.md" download>{{ icon('download') }} 下载文档</a><a href="/feed{% if doc.edition %}-{{ doc.edition }}{% endif %}.xml">{{ icon('rss') }} 订阅</a>{% if view.window %}<span>报道时段：{{ view.window }}</span>{% endif %}</div></header>
 {% if legacy_html %}
 <div class="reading-layout single-layout">{{ contents(toc_groups) }}<article class="reader-content prose legacy" id="daily-report">{{ legacy_html }}</article></div>
 {% else %}

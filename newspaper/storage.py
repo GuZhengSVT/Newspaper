@@ -120,6 +120,18 @@ class Store:
             progress INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0, last_error TEXT,
             PRIMARY KEY(batch_id,account_id,channel,recipient)
           );
+          CREATE TABLE IF NOT EXISTS workflow_health (
+            command TEXT PRIMARY KEY, failures INTEGER NOT NULL, first_failure REAL NOT NULL,
+            updated_at REAL NOT NULL, last_error TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS failure_alert_outbox (
+            incident_id TEXT NOT NULL, account_id TEXT NOT NULL, channel TEXT NOT NULL,
+            recipient TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+            progress INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0,
+            last_error TEXT, expires_at REAL NOT NULL,
+            PRIMARY KEY(incident_id,account_id,channel,recipient)
+          );
         """)
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
         if "facts" not in columns:
@@ -168,7 +180,8 @@ class Store:
 
     def set_task(self, day: str, task_id: str | None) -> None:
         if task_id:
-            self.db.execute('insert or ignore into publication_tasks(day,task_id) values(?,?)',(day,task_id))
+            self.db.execute('''insert into publication_tasks(day,task_id) values(?,?)
+                on conflict(day) do update set task_id=excluded.task_id''',(day,task_id))
             self.db.commit()
 
     def existing_publication(self, job: dict, window: dict) -> str | None:
@@ -177,8 +190,8 @@ class Store:
         if self.db.execute("select 1 from editions where day=? and status in ('ready','published')",(key,)).fetchone():
             return key
         rows=self.db.execute("""select e.day from editions e join publication_tasks t on t.day=e.day
-            where t.task_id=? and e.status in ('ready','published') and e.expires_at>?""",
-            (job['task_id'],utcnow().timestamp())).fetchall()
+            where (t.task_id=? or e.day like ?) and e.status in ('ready','published') and e.expires_at>?""",
+            (job['task_id'],window['date']+'/%',utcnow().timestamp())).fetchall()
         matches=[]
         for row in rows:
             doc=self.document(row['day'])

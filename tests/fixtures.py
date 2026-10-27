@@ -2,6 +2,7 @@
 import copy
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from newspaper.storage import Store, atomic_json, edition_key, utcnow
 
 class NewspaperCase(unittest.TestCase):
     def setUp(self):
+        # Content tests isolate external coordinator calls; orchestration is tested separately.
+        self.manager_start = patch('newspaper.coordinator.Coordinator.start', return_value=None)
+        self.manager_approve = patch('newspaper.coordinator.Coordinator.approve', return_value=None)
+        self.manager_start.start();self.manager_approve.start()
+        self.addCleanup(self.manager_start.stop);self.addCleanup(self.manager_approve.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.day = utcnow().date().isoformat()

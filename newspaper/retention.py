@@ -53,6 +53,8 @@ def clean(settings: Settings, store: Store, now: float | None = None) -> dict:
     store.db.execute("DELETE FROM notification_batches WHERE expires_at<=?", (now,))
     store.db.execute("DELETE FROM editions WHERE expires_at<=?", (now,))
     store.db.execute("DELETE FROM runs WHERE started_at<=?", (now - 30 * 86400,))
+    store.db.execute("DELETE FROM failure_alert_outbox WHERE expires_at<=?", (now,))
+    store.db.execute("DELETE FROM workflow_health WHERE updated_at<=?", (now - 30 * 86400,))
     store.db.commit()
     store.db.execute("VACUUM")
     # Caller holds the shared job lock. Nothing here can belong to an active run.

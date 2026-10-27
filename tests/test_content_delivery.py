@@ -244,7 +244,7 @@ class ContentTests(NewspaperCase):
 class MultipartRetryTests(ProjectCase):
 
     def test_retry_resumes_after_last_acknowledged_part_after_restart(self):
-        settings=self.make_settings();scheduled=jobs(settings,self.now)
+        settings=self.make_settings();scheduled=jobs(settings,self.now)[:1]
         settings.values['notifications']['email']['enabled']=False
         ids=prepare_batches(settings,self.store,scheduled)
         for member in scheduled:self.save(*member)

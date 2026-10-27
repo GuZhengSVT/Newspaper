@@ -73,19 +73,20 @@ class CalendarTests(unittest.TestCase):
 
 class ProjectTests(ProjectCase):
 
-    def test_same_schedule_across_groups_sends_one_message_per_channel_without_repeats(self):
+    def test_same_schedule_across_groups_sends_independently_without_repeats(self):
         settings=self.make_settings();scheduled=jobs(settings,self.now)
         batch_ids=prepare_batches(settings,self.store,scheduled)
-        self.assertEqual(len(batch_ids),1)
+        self.assertEqual(len(batch_ids),2)
+        self.assertNotEqual(scheduled[0][0]['task_id'],scheduled[1][0]['task_id'])
         for job,window in scheduled:self.save(job,window)
         with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
-            self.assertEqual(finish_batches(settings,self.store,batch_ids)['sent'],2)
+            self.assertEqual(finish_batches(settings,self.store,batch_ids)['sent'],4)
             self.assertEqual(finish_batches(settings,self.store,batch_ids)['sent'],0)
             self.assertEqual(deliver_batches(settings,self.store)['sent'],0)
-        self.assertEqual(send.call_count,2)
+        self.assertEqual(send.call_count,4)
         for call in send.call_args_list:
-            self.assertIn('First group',call.args[3]);self.assertIn('Second group',call.args[3])
-        self.assertEqual(len({call.args[4] for call in send.call_args_list}),1)
+            self.assertNotEqual('First group' in call.args[3],'Second group' in call.args[3])
+        self.assertEqual(len({call.args[4] for call in send.call_args_list}),2)
 
     def test_different_schedule_tasks_are_not_batched_together(self):
         settings=self.make_settings([{'period':'weekly','weekday':'wed'},{'period':'weekly','weekday':'fri'}])
@@ -145,20 +146,22 @@ class ProjectTests(ProjectCase):
             self.assertEqual(row['error'],'SearchPlanError')
             self.assertEqual(json.loads(row['metrics'])['search_plan_errors'],problems)
 
-    def test_partial_generation_waits_and_recovers_after_restart(self):
+    def test_completed_board_sends_before_next_board_and_recovers_after_restart(self):
         settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
         self.save(*scheduled[0])
-        with patch('newspaper.batches.send_text') as send:
-            finish_batches(settings,self.store,ids);send.assert_not_called()
+        with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
+            self.assertEqual(finish_batches(settings,self.store,ids)['sent'],2)
+            self.assertTrue(all('First group' in c.args[3] and 'Second group' not in c.args[3] for c in send.call_args_list))
         self.store.close();self.store=Store(settings)
         self.assertEqual(prepare_batches(settings,self.store,scheduled),ids)
         self.save(*scheduled[1])
         with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
             self.assertEqual(finish_batches(settings,self.store,ids)['sent'],2)
         self.assertEqual(send.call_count,2)
+        self.assertTrue(all('Second group' in c.args[3] and 'First group' not in c.args[3] for c in send.call_args_list))
 
     def test_only_failed_channel_retries(self):
-        settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
+        settings=self.make_settings();scheduled=jobs(settings,self.now)[:1];ids=prepare_batches(settings,self.store,scheduled)
         for member in scheduled:self.save(*member)
         with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text',side_effect=[RuntimeError('rejected'),None,None]) as send:
             first=finish_batches(settings,self.store,ids)
@@ -169,7 +172,7 @@ class ProjectTests(ProjectCase):
         self.assertEqual([c.args[1] for c in send.call_args_list],['email','telegram','email'])
 
     def test_uncertain_network_delivery_and_interrupted_send_never_auto_repeat(self):
-        settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
+        settings=self.make_settings();scheduled=jobs(settings,self.now)[:1];ids=prepare_batches(settings,self.store,scheduled)
         for member in scheduled:self.save(*member)
         with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text',side_effect=[UncertainDelivery(),None]) as send:
             self.assertEqual(finish_batches(settings,self.store,ids)['uncertain'],1)
@@ -220,14 +223,16 @@ class ProjectTests(ProjectCase):
         settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
         settings.values['editions'][0]['id']='renamed'
         scheduled=jobs(settings,self.now)
-        self.assertEqual(prepare_batches(settings,self.store,scheduled),ids)
+        new_ids=prepare_batches(settings,self.store,scheduled)
+        self.assertNotEqual(new_ids[0],ids[0]);self.assertEqual(new_ids[1],ids[1])
         for member in scheduled:self.save(*member)
         with patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
-            self.assertEqual(finish_batches(settings,self.store,ids)['sent'],2)
-        self.assertTrue(all('/renamed/' in call.args[3] for call in send.call_args_list))
+            self.assertEqual(finish_batches(settings,self.store,new_ids)['sent'],4)
+            self.assertEqual(finish_batches(settings,self.store,ids)['sent'],0)
+        self.assertEqual(sum('/renamed/' in c.args[3] for c in send.call_args_list),2)
 
     def test_correction_note_is_durable_in_both_channels_and_never_resent(self):
-        settings=self.make_settings();scheduled=jobs(settings,self.now);ids=prepare_batches(settings,self.store,scheduled)
+        settings=self.make_settings();scheduled=jobs(settings,self.now)[:1];ids=prepare_batches(settings,self.store,scheduled)
         for member in scheduled:self.save(*member)
         note='更正：此前推送为空，请以本次正文为准。'
         self.store.db.execute('update notification_batches set correction_note=? where id=?',(note,ids[0]));self.store.db.commit()
@@ -349,7 +354,7 @@ class ProjectTests(ProjectCase):
         doc['sections'][0]['articles'][0]['title']='blocked announcement'
         with self.assertRaisesRegex(ValueError,'keyword filter'):validate_report(doc,settings,[self.source],[],self.window)
 
-    def test_scheduled_pipeline_generates_then_sends_one_cross_group_batch_once(self):
+    def test_scheduled_pipeline_finishes_and_sends_each_board_before_starting_the_next(self):
         settings=self.make_settings();settings.values['search']={'mode':'bounded'};self.store.settings=settings
         scheduled=jobs(settings,self.now);responses=[];collections=[]
         for job,window in scheduled:
@@ -360,15 +365,22 @@ class ProjectTests(ProjectCase):
             candidate={'event_key':article['event_key'],'entities':['Fixture Product'],'section_id':section['id'],'importance':'重要','source_ids':['s1']}
             collections.append(([self.source],[candidate],[],[],{}))
             responses += [doc,{'ok':True,'summary_ok':True,'article_reviews':[{'event_key':article['event_key'],'ok':True,'problems':[]}]}]
+        timeline=[]
+        def collect(*args,**kwargs):
+            timeline.append('research:'+args[0].sections[0]['id'])
+            return collections.pop(0)
+        def sent(*args,**kwargs):
+            timeline.append('send:'+('fixture' if 'First group' in args[3] else 'other'))
         with patch('newspaper.pipeline.utcnow',return_value=self.now), \
-             patch('newspaper.pipeline.bounded_research',side_effect=collections) as research, \
+             patch('newspaper.pipeline.bounded_research',side_effect=collect) as research, \
              patch('newspaper.pipeline.Model.request',side_effect=responses) as model, \
-             patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text') as send:
+             patch('newspaper.batches.readiness',return_value=True),patch('newspaper.batches.send_text',side_effect=sent) as send:
             self.assertEqual(generate(settings,self.store)['state'],'published')
             self.assertEqual(generate(settings,self.store)['state'],'idle')
-        self.assertEqual(research.call_count,2);self.assertEqual(model.call_count,4);self.assertEqual(send.call_count,2)
+        self.assertEqual(research.call_count,2);self.assertEqual(model.call_count,4);self.assertEqual(send.call_count,4)
+        self.assertEqual(timeline,['research:fixture','send:fixture','send:fixture','research:other','send:other','send:other'])
         self.assertEqual(self.store.db.execute('select count(*) from deliveries').fetchone()[0],0)
-        self.assertEqual(self.store.db.execute("select count(*) from notification_outbox where state='sent'").fetchone()[0],2)
+        self.assertEqual(self.store.db.execute("select count(*) from notification_outbox where state='sent'").fetchone()[0],4)
 
     def test_custom_fixed_queries_bypass_planner_and_keep_window(self):
         from newspaper.bounded import research

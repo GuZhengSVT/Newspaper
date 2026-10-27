@@ -43,24 +43,21 @@ class TranslationTests(NewspaperCase):
         self.assertIn('bilingual-toggle',page)
         self.assertEqual(sentence_units(article),['任务已经启动。','结果仍需核实。'])
 
-    def test_sentence_contract_retries_omissions_and_requires_independent_review(self):
+    def test_translation_uses_one_call_and_preserves_sentence_ids(self):
         self.bilingual();article=self.doc['sections'][0]['articles'][0];article.pop('bilingual')
-        client=Mock();client.request.side_effect=[
-            {'title_en':'Mission','sentences':[{'id':0,'en':'The mission has begun.'}]},
-            {'title_en':'Mission','sentences':[{'id':0,'en':'The mission has begun.'},{'id':1,'en':'The results still need verification.'}]},
-            {'ok':True,'title_ok':True,'sentences':[{'id':0,'ok':True,'problems':[]},{'id':1,'ok':True,'problems':[]}]}]
+        client=Mock();client.request.return_value={
+            'title_en':'Mission','sentences':[{'id':0,'en':'The mission has begun.'},{'id':1,'en':'The results still need verification.'}]}
         self.assertEqual(translate(self.doc,client),1)
-        self.assertEqual([c.args[0] for c in client.request.call_args_list],['translate','translate','translate-review'])
-        self.assertTrue(client.request.call_args_list[1].args[1]['feedback'])
+        self.assertEqual([c.args[0] for c in client.request.call_args_list],['translate'])
         validate_bilingual(article,required=True)
         self.assertEqual(translate(self.doc,client),0)
 
-    def test_failed_review_never_saves_unreviewed_translation(self):
+    def test_incomplete_translation_is_not_saved_or_retried_internally(self):
         article=self.doc['sections'][0]['articles'][0]
-        draft={'title_en':'Test','sentences':[{'id':0,'en':'Synthetic text.'}]}
-        client=Mock();client.request.side_effect=[draft,{'ok':False,'problems':['Wrong meaning']},draft,{'ok':False}]
+        client=Mock();client.request.return_value={'title_en':'Test','sentences':[]}
         with self.assertRaises(ValueError):translate(self.doc,client)
         self.assertNotIn('bilingual',article)
+        client.request.assert_called_once()
 
     def test_mutated_chinese_and_missing_english_are_rejected(self):
         article=self.bilingual()
@@ -69,6 +66,19 @@ class TranslationTests(NewspaperCase):
         article.pop('bilingual')
         with self.assertRaises(ValueError):
             news_message(self.settings,[(self.day,self.doc)],'News',bilingual_sections={'fixture'})
+
+    def test_translation_diagnostics_record_validation_failure(self):
+        self.bilingual();article=self.doc['sections'][0]['articles'][0];article.pop('bilingual')
+        draft={'title_en':'Mission','sentences':[
+            {'id':0,'en':'The mission has begun.'},{'id':1,'en':'结果仍需核实。'}]}
+        client=Mock();client.request.return_value=draft;failures=[]
+        with self.assertRaises(ValueError):translate(self.doc,client,diagnostics=failures)
+        self.assertEqual(len(failures),1)
+        failure=failures[0]
+        self.assertEqual((failure['event_key'],failure['attempt'],failure['stage']),
+                         (article['event_key'],1,'translate'))
+        self.assertEqual(failure['reason'],'Invalid English translation')
+        self.assertNotIn('The mission has begun.',json.dumps(failures))
 
     def test_merged_fact_paragraphs_keep_sentence_order(self):
         article=self.bilingual()
@@ -95,19 +105,18 @@ class TranslationTests(NewspaperCase):
         self.assertIn(second_zh,matching[0])
         self.assertNotIn(first_en,matching[0])
 
-    def test_production_translates_after_fact_review_and_saves_both_languages(self):
+    def test_production_translates_once_after_fact_review_and_saves_both_languages(self):
         from newspaper.pipeline import generate
         self.settings.values['translation']={'enabled':True}
         draft={'title_en':'Synthetic event','sentences':[{'id':0,'en':'Offline test text.'}]}
-        review={'ok':True,'title_ok':True,'sentences':[{'id':0,'ok':True,'problems':[]}]}
         with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
              patch('newspaper.pipeline.gather',return_value={'sources':[self.source]}), \
-             patch('newspaper.pipeline.Model.request',side_effect=[self.doc,{'ok':True},draft,review]) as model, \
+             patch('newspaper.pipeline.Model.request',side_effect=[self.doc,{'ok':True},draft]) as model, \
              patch('newspaper.notify.readiness',return_value=False):
             result=generate(self.settings,self.store,notify=True)
         self.assertEqual(result['state'],'published')
         self.assertEqual(result['notifications']['unconfigured'],2)
-        self.assertEqual([c.args[0] for c in model.call_args_list],['edit','review','translate','translate-review'])
+        self.assertEqual([c.args[0] for c in model.call_args_list],['edit','review','translate'])
         self.assertIn('bilingual',self.store.document(self.day)['sections'][0]['articles'][0])
 
     def test_translation_failure_blocks_publication_and_delivery(self):
@@ -115,10 +124,14 @@ class TranslationTests(NewspaperCase):
         self.settings.values['translation']={'enabled':True}
         with patch('newspaper.pipeline.utcnow',return_value=datetime.fromisoformat(self.day+'T12:05:00+08:00')), \
              patch('newspaper.pipeline.gather',return_value={'sources':[self.source]}), \
-             patch('newspaper.pipeline.Model.request',side_effect=[self.doc,{'ok':True},{},{}]):
+             patch('newspaper.pipeline.Model.request',side_effect=[self.doc,{'ok':True},{}]):
             with self.assertRaises(ValueError):generate(self.settings,self.store,notify=True)
         self.assertFalse(self.store.published(self.day))
         self.assertEqual(self.store.db.execute('select count(*) from deliveries').fetchone()[0],0)
+        metrics=json.loads(self.store.db.execute('select metrics from runs order by id desc limit 1').fetchone()[0])
+        self.assertEqual(len(metrics['translation_failures']),1)
+        self.assertEqual(metrics['translation_failures'][-1]['reason'],
+                         'Translation omitted, duplicated or reordered sentences')
 
 
 class AccountTests(ProjectCase):

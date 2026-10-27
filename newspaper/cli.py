@@ -15,6 +15,7 @@ from .pipeline import generate, import_legacy
 from .publish import build
 from .retention import clean
 from .storage import Store, lock
+from .alerts import COMMANDS, record_command, process_failure_alerts
 
 
 def main() -> int:
@@ -98,7 +99,19 @@ def main() -> int:
                               "notifications": [dict(r) for r in store.db.execute("SELECT channel,state,count(*) AS count FROM deliveries GROUP BY channel,state")],
                               "task_notifications": [dict(r) for r in store.db.execute("SELECT batch_id,channel,state,attempts,last_error FROM notification_outbox")],
                               "account_notifications": [dict(r) for r in store.db.execute("SELECT batch_id,account_id,channel,state,attempts,progress,last_error FROM account_outbox")],
+                              "failure_alerts": [dict(r) for r in store.db.execute("SELECT incident_id,account_id,channel,state,attempts,last_error FROM failure_alert_outbox")],
                               "tasks": [dict(r) for r in store.db.execute("SELECT id,period,window_end,state FROM notification_batches")]}
+            except Exception as exc:
+                if args.command in COMMANDS and not (args.command == 'run' and args.no_notify):
+                    record_command(settings,store,args.command,exc)
+                    process_failure_alerts(settings,store)
+                raise
+            else:
+                if args.command in COMMANDS and not (args.command == 'run' and args.no_notify):
+                    record_command(settings,store,args.command)
+                    alerts=process_failure_alerts(settings,store)
+                    if settings.values.get('notifications',{}).get('failure_alerts'):
+                        result['failure_alerts']=alerts
             finally:
                 store.close()
         print(json.dumps(result, ensure_ascii=False))

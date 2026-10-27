@@ -1,4 +1,4 @@
-"""Durable notification batches keyed by schedule and publication slot, not group."""
+"""Durable independent board notifications, isolated by board and schedule."""
 from __future__ import annotations
 
 import hashlib
@@ -13,16 +13,26 @@ def prepare_batches(settings, store, jobs: list) -> list[str]:
     from .accounts import account_mode
     tasks={}
     for job, window in jobs:
-        if job.get('notify',True):tasks.setdefault((job['task_id'],window['window_end']),[]).append((job,window))
+        if job.get('notify',True):tasks.setdefault((job.get('group_id',job['id']),job['task_id'],window['window_end']),[]).append((job,window))
     channels=[c for c in ['email','telegram'] if settings.values.get('notifications',{}).get(c,{}).get('enabled')]
     if channels and account_mode(settings):channels=['accounts']
+    batch_id_for=lambda group_id,task_id,end: 'b-'+hashlib.sha256((group_id+'\0'+task_id+'\0'+end).encode()).hexdigest()[:32]
+    desired={batch_id_for(*identity) for identity in tasks}
+    scheduled_keys={w['date']+'/'+job['id'] for members in tasks.values() for job,w in members}
+    backlog=set()
+    for old in store.db.execute("select id,expected from notification_batches where state in ('waiting','superseded')").fetchall():
+        expected=set(json.loads(old['expected']))
+        if old['id'] not in desired and expected & scheduled_keys:
+            # Waiting batches have never enqueued recipients. Split them without losing or duplicating delivery.
+            backlog.update(expected)
+            store.db.execute("update notification_batches set state='superseded' where id=?",(old['id'],))
     result=[]
-    for (task_id,end), members in tasks.items():
-        batch_id='b-'+hashlib.sha256((task_id+'\0'+end).encode()).hexdigest()[:32]
+    for (group_id,task_id,end), members in tasks.items():
+        batch_id=batch_id_for(group_id,task_id,end)
         expected=[w['date']+'/'+job['id'] for job,w in members]
         existing=store.db.execute('select state from notification_batches where id=?',(batch_id,)).fetchone()
         # Never backfill notifications for previously published previews or migrated issues.
-        if not existing and (not channels or all(store.published(key) for key in expected)):continue
+        if not existing and (not channels or (all(store.published(key) for key in expected) and not set(expected)&backlog)):continue
         if not existing:
             window=members[0][1];period=members[0][0]['schedule'].get('period','daily')
             store.db.execute('''insert into notification_batches
@@ -54,6 +64,12 @@ def finish_batches(settings, store, batch_ids: list[str]) -> dict:
 def batch_subject(settings, batch) -> str:
     label={'daily':'日报','weekly':'周报','monthly':'月报','interval':'定期新闻'}[batch['period']]
     subject=settings.values.get('project',{}).get('name','Newspaper')+' · '+label+' · '+batch['window_end'][:10]
+    expected=json.loads(batch['expected'])
+    if expected:
+        slug=expected[0].split('/',1)[-1]
+        group=next((g for g in sorted(settings.editions,key=lambda g:len(g['id']),reverse=True)
+                    if slug==g['id'] or slug.startswith(g['id']+'-')),None)
+        if group:subject+=' · '+group['name']
     if batch['correction_note']:subject+=' · 更正'
     return subject
 

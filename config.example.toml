@@ -8,7 +8,7 @@ retention_days = 30
 accounts_file = "accounts.local.toml"
 
 [translation]
-# Generate and independently review English alongside the approved Chinese, before publishing.
+# Translate each approved Chinese article once before publishing.
 enabled = true
 
 [model]
@@ -18,6 +18,8 @@ base_url = "https://api.example.com/v1"
 api_key_env = "NEWSPAPER_API_KEY"
 timeout_seconds = 180
 max_tokens = 12000
+manager_reasoning_effort = "max"
+worker_reasoning_effort = "low"
 
 [search]
 mode = "bounded"
@@ -37,3 +39,7 @@ bilingual = false
 enabled = false
 [notifications.telegram]
 enabled = false
+
+# Optional operations alerts, sent only to this account's enabled email/Telegram bindings.
+# [notifications.failure_alerts]
+# account_id = "ExampleAdmin"

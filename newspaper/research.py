@@ -65,7 +65,7 @@ def prepare_profile(work: Path, settings: Settings) -> tuple[Path, dict]:
     model = settings.values["model"]
     search = settings.values.get("search", {})
     overlay = [
-        {"id": "agent-default-model", "config": {"provider": model["provider"], "model": model["id"], "reasoningEffort": "high"}},
+        {"id": "agent-default-model", "config": {"provider": model["provider"], "model": model["id"], "reasoningEffort": model.get('worker_reasoning_effort', 'low')}},
         {"id": "llm-pi-ai", "config": {"providers": {model["provider"]: {
             "displayName": model["provider"], "apiKeyEnv": model.get("api_key_env", "NEWSPAPER_API_KEY"),
             "api": "openai-completions", "baseURL": model["base_url"].rstrip("/") + "/",

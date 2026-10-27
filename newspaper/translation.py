@@ -1,4 +1,4 @@
-"""Produce reviewed sentence pairs once, before publication; never translate in readers."""
+"""Translate sentence pairs once, before publication; never translate in readers."""
 from __future__ import annotations
 
 import re
@@ -8,10 +8,28 @@ def sentence_units(article: dict) -> list[str]:
     paragraphs = list(dict.fromkeys(f['text'].strip() for f in article['facts'] if f['text'].strip()))
     result = []
     for paragraph in paragraphs or [article['summary']]:
-        # Keep closing quotation marks with their sentence. Decimal points and abbreviations stay intact.
-        result.extend(m.group().strip() for m in re.finditer(r'.+?(?:[。！？!?]+[”’"」』）)]*|\n+|$)', paragraph, re.S)
-                      if m.group().strip())
+        # Punctuation inside a title such as 《BanG Dream! It's MyGO!!!!!》 is not a sentence boundary.
+        pairs = {'《': '》', '「': '」', '『': '』', '“': '”', '‘': '’', '（': '）', '(': ')', '【': '】', '[': ']', '"': '"'}
+        stack = [];start = 0;index = 0
+        while index < len(paragraph):
+            char = paragraph[index]
+            if stack and char == stack[-1]:stack.pop()
+            elif char in pairs and pairs[char] in paragraph[index + 1:]:stack.append(pairs[char])
+            elif not stack and char in '。！？!?\n':
+                end = index + 1
+                while end < len(paragraph) and paragraph[end] in '。！？!?\n”’"」』）)]':end += 1
+                if paragraph[start:end].strip():result.append(paragraph[start:end].strip())
+                start = end;index = end;continue
+            index += 1
+        if paragraph[start:].strip():result.append(paragraph[start:].strip())
     return result
+
+
+def legacy_sentence_units(article: dict) -> list[str]:
+    # Read existing stored pairs without invalidating already published archives.
+    paragraphs = list(dict.fromkeys(f['text'].strip() for f in article['facts'] if f['text'].strip()))
+    return [m.group().strip() for paragraph in paragraphs or [article['summary']]
+            for m in re.finditer(r'.+?(?:[。！？!?]+[”’"」』）)]*|\n+|$)', paragraph, re.S) if m.group().strip()]
 
 
 def validate_bilingual(article: dict, *, required: bool = False) -> None:
@@ -23,9 +41,9 @@ def validate_bilingual(article: dict, *, required: bool = False) -> None:
         raise ValueError('Invalid bilingual content')
     english = [value['title_en']]
     pairs = value['sentences']
-    if (not isinstance(pairs, list) or not pairs or len(pairs) != len(sentence_units(article))
+    if (not isinstance(pairs, list) or not pairs
         or any(not isinstance(p, dict) or set(p) != {'en', 'zh'} for p in pairs)
-        or [p['zh'] for p in pairs] != sentence_units(article)):
+        or [p['zh'] for p in pairs] not in [sentence_units(article), legacy_sentence_units(article)]):
         raise ValueError('Bilingual sentences do not align with the approved Chinese text')
     english += [p['en'] for p in pairs]
     if any(not isinstance(s, str) or not s.strip() or len(s) > 12000 or '\n' in s
@@ -50,8 +68,33 @@ def paragraph_pairs(article: dict, paragraphs: list[str]) -> list[dict]:
     return result
 
 
-def translate(doc: dict, client) -> int:
-    """Per-article bounded translation + independent review; commit no partial article."""
+def validate_dates(chinese: str, english: str) -> None:
+    """Reject changed explicit calendar dates before model opinions can approve them."""
+    dates = set();month = None
+    for match in re.finditer(r'(?:(\d{1,2})月)?(\d{1,2})日', chinese):
+        if match[1]:month = int(match[1])
+        dates.add((month, int(match[2])))
+    if not dates:return
+    months = ['January', 'February', 'March', 'April', 'May', 'June',
+              'July', 'August', 'September', 'October', 'November', 'December']
+    names = {name.casefold(): i for i, name in enumerate(months, 1)}
+    names.update({name[:3].casefold(): i for i, name in enumerate(months, 1)})
+    alternatives = '|'.join(sorted(names, key=len, reverse=True))
+    matches = []
+    for match in re.finditer(r'\b(' + alternatives + r')\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b', english, re.I):
+        matches.append((names[match[1].casefold()], int(match[2])))
+    for match in re.finditer(r'\b(\d{1,2})(?:st|nd|rd|th)?\s+(' + alternatives + r')\b', english, re.I):
+        matches.append((names[match[2].casefold()], int(match[1])))
+    for match in re.finditer(r'\b\d{4}-(\d{2})-(\d{2})\b', english):
+        matches.append((int(match[1]), int(match[2])))
+    for month, day in matches:
+        if (month, day) not in dates and (None, day) not in dates:
+            raise ValueError(f'English calendar date {month:02d}-{day:02d} differs from the Chinese source')
+
+
+
+def translate(doc: dict, client, *, diagnostics: list | None = None, on_article_translated=None) -> int:
+    """Translate each unfinished article once; validate structure without a model reviewer."""
     count = 0
     for section in doc.get('sections', []):
         for article in section['articles']:
@@ -61,32 +104,26 @@ def translate(doc: dict, client) -> int:
             units = sentence_units(article)
             source = {'title_zh': article['title'], 'sentences': [
                 {'id': i, 'zh': text} for i, text in enumerate(units)]}
-            feedback = ''
-            for attempt in range(2):
-                try:
-                    draft = client.request('translate', {**source, 'feedback': feedback})
-                    rows = draft.get('sentences', [])
-                    if (not isinstance(rows, list) or len(rows) != len(units)
-                        or any(not isinstance(r, dict) or type(r.get('id')) is not int for r in rows)
-                        or [r['id'] for r in rows] != list(range(len(units)))):
-                        raise ValueError('Translation omitted, duplicated or reordered sentences')
-                    value = {'title_en': draft.get('title_en'), 'sentences': [
-                        {'en': r.get('en'), 'zh': zh} for r, zh in zip(rows, units)]}
-                    validate_bilingual({**article, 'bilingual': value}, required=True)
-                    review = client.request('translate-review', {**source, 'translation': draft})
-                    verdicts = review.get('sentences', [])
-                    if (review.get('title_ok') is not True or review.get('ok') is not True or review.get('problems',[]) != []
-                        or not isinstance(verdicts, list) or len(verdicts) != len(units)
-                        or any(not isinstance(r, dict) or type(r.get('id')) is not int for r in verdicts)
-                        or [r['id'] for r in verdicts] != list(range(len(units)))
-                        or any(r.get('ok') is not True or r.get('problems') != [] for r in verdicts)):
-                        raise ValueError('Translation review rejected alignment, fidelity or fluency: ' +
-                                         str(review)[:1200])
-                except (ValueError, KeyError, TypeError) as exc:
-                    if attempt:raise ValueError('Bilingual translation failed review') from exc
-                    feedback = str(exc)[:600]
-                    continue
-                article['bilingual'] = value
-                count += 1
-                break
+            try:
+                draft = client.request('translate', source)
+                rows = draft.get('sentences', [])
+                if (not isinstance(rows, list) or len(rows) != len(units)
+                    or any(not isinstance(r, dict) or type(r.get('id')) is not int for r in rows)
+                    or [r['id'] for r in rows] != list(range(len(units)))):
+                    raise ValueError('Translation omitted, duplicated or reordered sentences')
+                value = {'title_en': draft.get('title_en'), 'sentences': [
+                    {'en': r.get('en'), 'zh': zh} for r, zh in zip(rows, units)]}
+                validate_bilingual({**article, 'bilingual': value}, required=True)
+                validate_dates(article['title'], value['title_en'])
+                for pair in value['sentences']:validate_dates(pair['zh'], pair['en'])
+            except Exception as exc:
+                if diagnostics is not None:
+                    diagnostics.append({'section_id': section['id'], 'event_key': article.get('event_key'),
+                        'attempt': 1, 'stage': 'translate', 'error_type': type(exc).__name__,
+                        'reason': str(exc)[:600] if isinstance(exc, (ValueError, KeyError, TypeError))
+                                  else type(exc).__name__})
+                raise
+            article['bilingual'] = value
+            count += 1
+            if on_article_translated:on_article_translated(article)
     return count

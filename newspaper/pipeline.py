@@ -13,6 +13,7 @@ from jsonschema import ValidationError
 from .config import TZ, Settings
 from .bounded import research as bounded_research, supplement as bounded_supplement, SearchPlanError
 from .model import Model
+from .coordinator import Coordinator
 from .style import style_issues, compact_articles
 from .evidence import selected_sources, used_evidence, validate_selection, context
 from .notify import deliver, enqueue
@@ -25,7 +26,7 @@ from .validation import SCHEMA, validate_report, normalize
 
 def generate(settings: Settings, store: Store, notify: bool = True, cutoff: datetime | None = None,
              *, manual: bool = False, task_id: str | None = None) -> dict:
-    """Both editions share a bounded in-run source cache; publications are independent."""
+    """Complete and deliver each board serially; board contexts and caches are isolated."""
     if cutoff is not None:
         now = utcnow().astimezone(settings.timezone)
         if cutoff.tzinfo is None:
@@ -37,9 +38,11 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
     if not settings.sections:
         return {"state": "awaiting_sections", "date": utcnow().date().isoformat()}
     if settings.values.get('project') or 'schedule' in settings.values:
-        from .schedule import jobs
+        from .schedule import jobs, scope_publication_history
         from .batches import prepare_batches, finish_batches
-        results=[];cache={};scheduled=jobs(settings, cutoff or utcnow(),manual=True) if manual else jobs(settings,utcnow())
+        scope_publication_history(settings,store)
+        results=[];cache={};board_state={};active_group=None
+        scheduled=jobs(settings, cutoff or utcnow(),manual=True) if manual else jobs(settings,utcnow())
         if task_id:
             scheduled=[(e,w) for e,w in scheduled if e['task_id']==task_id]
             if not scheduled:raise ValueError('Task is unknown or not due; use --manual to run before its scheduled date')
@@ -49,6 +52,7 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
             scheduled=[({**e,'id':key.split('/',1)[1]} if (key:=store.existing_publication(e,w)) else e,w)
                        for e,w in scheduled]
         batch_ids=prepare_batches(settings, store, scheduled) if notify else []
+        notifications={'sent':0,'failed':0,'unconfigured':0,'uncertain':0} if notify else {}
         for edition, window in scheduled:
             key=window['date']+'/'+edition['id']
             now=utcnow().timestamp()
@@ -58,13 +62,17 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
                 results.append({'edition':edition['id'],'state':'retry_deferred','date':window['date']})
                 continue
             try:
+                if active_group!=edition['group_id']:
+                    cache={};board_state={};active_group=edition['group_id']
                 results.append(generate_edition(settings.for_edition(edition), store, edition, cache, False,
-                                                publication_window=window))
+                                                publication_window=window,board_state=board_state))
             except Exception as exc:
                 results.append({'edition':edition['id'],'state':'failed','error_type':type(exc).__name__})
+            if notify:
+                delivered=finish_batches(settings,store,batch_ids)
+                for channel,count in delivered.items():notifications[channel]=notifications.get(channel,0)+count
         state=('partial_failure' if any(r['state']=='failed' for r in results) else
                'published' if any(r['state']=='published' for r in results) else 'idle')
-        notifications=finish_batches(settings,store,batch_ids) if notify else {}
         return {'state':state,'date':utcnow().date().isoformat(),'editions':results,**({'notifications':notifications} if notify else {})}
     if utcnow().hour < 12:
         return {"state": "before_scheduled_window", "date": utcnow().date().isoformat()}
@@ -85,7 +93,8 @@ def generate(settings: Settings, store: Store, notify: bool = True, cutoff: date
 
 
 def generate_edition(settings: Settings, store: Store, edition: dict, cache: dict, notify: bool,
-                     cutoff: datetime | None = None, publication_window: dict | None = None) -> dict:
+                     cutoff: datetime | None = None, publication_window: dict | None = None,
+                     board_state: dict | None = None) -> dict:
     now = utcnow()
     day = publication_window['date'] if publication_window else now.date().isoformat()
     key = day + ("/" + edition["id"] if edition["id"] else "")
@@ -103,7 +112,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
         validate_report(doc, settings, evidence["sources"], store.history(edition.get("task_id")), window)
         if settings.values.get('translation',{}).get('enabled',False):
             from .translation import translate
-            translate(doc,Model(settings))
+            translate(doc,Model(settings,group_id=edition.get('group_id',edition['id'])))
             atomic_json(settings.data / 'editions' / key / 'report.json',doc)
             (settings.data / 'editions' / key / 'report.md').write_text(markdown(doc,settings))
         build(store.settings, store)
@@ -111,6 +120,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
         store.db.execute("INSERT INTO runs(day,started_at,finished_at,status,metrics) VALUES(?,?,?,'published',?)",
                          (key, now.timestamp(), utcnow().timestamp(), json.dumps({"resumed_from_ready": True})))
         store.db.commit()
+        (settings.data / 'editions' / key / 'translation-checkpoint.json').unlink(missing_ok=True)
         if notify:
             enqueue(settings, store, key)
         return {"state": "published", "resumed": True, "edition": edition["id"], "date": day,
@@ -123,14 +133,79 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
     cursor = store.db.execute("INSERT INTO runs(day,started_at,status) VALUES(?,?,'running')", (key, now.timestamp()))
     run_id = cursor.lastrowid
     store.db.commit()
-    client = Model(settings)
+    client = Model(settings, group_id=edition.get('group_id',edition['id']))
     metrics = {"dsh_calls": 0, "dsh_tokens": None, "cache_sources": 0}
     def record_stage(stage):
         metrics.update(stage=stage, model_calls=client.usage)
         store.db.execute("UPDATE runs SET metrics=? WHERE id=?", (json.dumps(metrics), run_id))
         store.db.commit()
     client.on_stage = record_stage
+    coordinator = None
+    if edition['id']:
+        coordinator = (board_state or {}).get('coordinator')
+        if coordinator:coordinator.bind(settings,edition,window,client)
+        else:
+            coordinator = Coordinator(settings,edition,window,client)
+            if board_state is not None:board_state['coordinator']=coordinator
+    if coordinator:coordinator.model.on_stage = record_stage
+    directory = settings.data / 'editions' / key
+    checkpoint_path = directory / 'translation-checkpoint.json'
+
+    def publish_document(doc, contexts, window, collection_status):
+        history = store.history(edition.get('task_id'))
+        validate_report(doc, settings, contexts, history, window)
+        if coordinator:
+            retained=coordinator.approve(doc,metrics)
+            metrics['coordination']=coordinator.state
+            if retained is not None and retained != {a['event_key'] for s in doc['sections'] for a in s['articles']}:
+                doc=keep_approved(doc,{'article_reviews':[
+                    {'event_key':a['event_key'],'ok':a['event_key'] in retained,'problems':[]}
+                    for s in doc['sections'] for a in s['articles']]},
+                    exclusion_reason='候选消息未达到本板块收录标准。',
+                    exclusion_note='部分候选消息未达到本板块收录标准，未予收录。')
+        evidence = {'window': window, 'sources': used_evidence(doc, contexts),
+                    'collection_status': collection_status}
+        if settings.values.get('translation',{}).get('enabled',False):
+            from .translation import translate
+            checkpoint = {'report': doc, 'evidence': evidence,
+                          'coordination': coordinator.state if coordinator else {}}
+            atomic_json(checkpoint_path, checkpoint)
+            metrics['translated_articles'] = translate(doc,client,
+                diagnostics=metrics.setdefault('translation_failures', []),
+                on_article_translated=lambda article: atomic_json(checkpoint_path, checkpoint))
+        validate_report(doc, settings, contexts, history, window)
+        directory.mkdir(parents=True, exist_ok=True)
+        atomic_json(directory / 'report.json', doc)
+        atomic_json(directory / 'evidence.json', evidence)
+        (directory / 'raw.json').unlink(missing_ok=True)
+        (directory / 'report.md').write_text(markdown(doc,settings))
+        store.db.execute("DELETE FROM editions WHERE day=? AND status!='published'", (key,))
+        store.db.commit()
+        store.add(doc,task_id=edition.get('task_id'))
+        record_stage('build')
+        build(store.settings, store)
+        store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
+        if notify:enqueue(settings, store, key)
+        store.db.execute("UPDATE runs SET status='published',finished_at=? WHERE id=?", (utcnow().timestamp(), run_id))
+        store.db.commit()
+        checkpoint_path.unlink(missing_ok=True)
+        result = {'state': 'published', 'edition': edition['id'], 'date': day,
+                  'articles': sum(len(s['articles']) for s in doc['sections']),
+                  'url': settings.base_url + '/daily/' + key + '/'}
+        if notify:result['notifications'] = deliver(settings, store)
+        return result
+
     try:
+        if checkpoint_path.is_file():
+            checkpoint = json.loads(checkpoint_path.read_text())
+            evidence = checkpoint['evidence']
+            if evidence['window'] == window:
+                metrics['resumed_translation'] = True
+                if coordinator:coordinator.state=checkpoint.get('coordination',{})
+                return publish_document(checkpoint['report'], evidence['sources'], window, evidence['collection_status'])
+        if coordinator:
+            coordinator.start()
+            metrics['coordination']=coordinator.state
         with tempfile.TemporaryDirectory(dir=settings.data / "tmp", prefix="run-") as temp:
             work = Path(temp)
             collections = []
@@ -191,6 +266,9 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 payload = {"window": window, "edition": edition, "sections": settings.sections,
                            "sources": contexts, "candidates": candidates,
                            "history": history, "schema": editor_schema, "feedback": feedback}
+                if edition['id']:
+                    payload['candidate_ids_by_section']={s['id']:[c['candidate_id'] for c in candidates
+                        if c['section_id']==s['id']] for s in settings.sections}
                 if attempt and repair_keys and edition["id"]:
                     scoped_candidates = [c for c in candidates if c["event_key"] in repair_keys]
                     repair_contexts = selected_sources(sources, scoped_candidates) if edition["id"] else contexts
@@ -206,7 +284,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 for section in doc['sections']:
                     for article in section['articles']:
                         article.pop('image',None)  # Only the optional source-bound illustration stage may add images.
-                        article.pop('bilingual',None)  # Only the separately reviewed translation stage may add English.
+                        article.pop('bilingual',None)  # Only the independent translation stage may add English.
                         try:
                             moment = datetime.fromisoformat(article['published_at'])
                             if moment.tzinfo is not None:article['published_at'] = moment.astimezone(TZ).isoformat()
@@ -365,34 +443,7 @@ def generate_edition(settings: Settings, store: Store, edition: dict, cache: dic
                 raise ValueError('Report exhausted bounded validation and review retries')
             from .images import illustrate
             illustrate(doc, contexts, client)
-            if settings.values.get('translation',{}).get('enabled',False):
-                from .translation import translate
-                metrics['translated_articles'] = translate(doc,client)
-            validate_report(doc, settings, contexts, history, window)
-            directory = settings.data / "editions" / key
-            directory.mkdir(parents=True, exist_ok=True)
-            atomic_json(directory / "report.json", doc)
-            atomic_json(directory / "evidence.json", {"window": window, "sources": used_evidence(doc, contexts),
-                                                     "collection_status": {"fetched_sources": len(sources)}})
-            # Remove raw snapshots from any interrupted earlier attempt.
-            (directory / "raw.json").unlink(missing_ok=True)
-            (directory / "report.md").write_text(markdown(doc,settings))
-            store.db.execute("DELETE FROM editions WHERE day=? AND status!='published'", (key,))
-            store.db.commit()
-            store.add(doc,task_id=edition.get("task_id"))
-            record_stage("build")
-            build(store.settings, store)
-            store.db.execute("UPDATE editions SET status='published' WHERE day=?", (key,))
-            if notify:
-                enqueue(settings, store, key)
-            store.db.execute("UPDATE runs SET status='published',finished_at=? WHERE id=?", (utcnow().timestamp(), run_id))
-            store.db.commit()
-            result = {"state": "published", "edition": edition["id"], "date": day,
-                      "articles": sum(len(s["articles"]) for s in doc["sections"]),
-                      "url": settings.base_url + "/daily/" + key + "/"}
-            if notify:
-                result["notifications"] = deliver(settings, store)
-            return result
+            return publish_document(doc, contexts, window, {'fetched_sources': len(sources)})
     except BaseException as exc:
         if isinstance(exc,SearchPlanError):metrics['search_plan_errors']=exc.problems
         store.db.execute("UPDATE runs SET status='failed',finished_at=?,error=? WHERE id=?",
@@ -413,8 +464,11 @@ def restore_event_keys(doc: dict, candidates: list[dict]) -> None:
             reference = article.pop('candidate_id', None)
             if reference is None:continue
             candidate = selected.get(reference)
-            if candidate is None or candidate['section_id'] != section['id']:
-                raise ValueError('Unknown or moved candidate reference')
+            if candidate is None:
+                raise ValueError(f'Unknown candidate reference {reference!r}; use candidate_ids_by_section')
+            if candidate['section_id'] != section['id']:
+                raise ValueError(f'Candidate {reference!r} belongs to section {candidate["section_id"]!r}; '
+                                 f'move it from {section["id"]!r} to that section or omit it')
             article['event_key'] = candidate['event_key']
 
 
@@ -470,7 +524,8 @@ def filter_invalid_articles(doc: dict, settings: Settings, sources: list[dict], 
     return result
 
 
-def keep_approved(doc: dict, review: dict) -> dict:
+def keep_approved(doc: dict, review: dict, *, exclusion_reason='候选消息未达到证据核验标准。',
+                  exclusion_note='部分候选消息未能充分核实，未予收录。') -> dict:
     """Publish only individual articles the final review explicitly approved."""
     expected = {a["event_key"] for s in doc["sections"] for a in s["articles"]}
     verdicts = review.get("article_reviews", [])
@@ -486,16 +541,16 @@ def keep_approved(doc: dict, review: dict) -> dict:
         if section["articles"]:
             section["empty_reason"] = ""
         else:
-            section["empty_reason"] = "候选消息未达到证据核验标准。"
+            section["empty_reason"] = exclusion_reason
     articles = [a for s in result["sections"] for a in s["articles"]]
     # Deterministic replacements cannot introduce new factual claims.
     result["highlights"] = [a["title"] for a in articles[:5]]
     result["summary"] = ("本期收录" + str(len(articles)) + "条通过核验的新闻。" if articles else
-                         "本期未收录新闻：候选消息未达到证据核验标准。")
+                         "本期未收录新闻：" + exclusion_reason)
     used = {e["source_id"] for a in articles for f in a["facts"] for e in f["evidence"]}
     result["sources"] = [s for s in result["sources"] if s["id"] in used]
     result["coverage_notes"] = list(dict.fromkeys(result.get("coverage_notes", []) +
-        (["部分候选消息未能充分核实，未予收录。"] if approved != expected else [])))[:30]
+        ([exclusion_note] if approved != expected else [])))[:30]
     return result
 
 

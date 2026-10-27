@@ -102,6 +102,36 @@ class SourceFirstTests(NewspaperCase):
         errors=plan_problems(queries,sections,set(),set(sections),2,1)
         self.assertEqual([p['code'] for p in errors],['total_limit','gap_limit'])
 
+    def test_repeated_shared_budget_overflow_trims_only_optional_queries(self):
+        self.settings.values['discovery']={'max_gap_queries':1}
+        queries=[{'section_id':'fixture','query':'missing topic '+str(i)} for i in range(2)]
+        client=Mock();client.request.side_effect=[{'queries':queries},{'queries':queries},
+                                                {'candidates':[self.candidate()]}]
+        diagnostics={}
+        with patch('newspaper.bounded.discover',return_value=([self.index()],{})), \
+             patch('newspaper.bounded.search',return_value=[]) as search, \
+             patch('newspaper.bounded.fetch',return_value=[self.source]):
+            research(self.settings,client,self.window,self.root,{},diagnostics)
+        self.assertEqual(search.call_args.args[1],queries[:1])
+        self.assertEqual(diagnostics['optional_queries_trimmed'],1)
+
+    def test_optional_trimming_preserves_fixed_queries_and_uncovered_sections(self):
+        self.settings.values['discovery']={'max_gap_queries':1}
+        self.settings.values['sections'] += [
+            {'id':'other','name':'Uncovered'},
+            {'id':'fixed','name':'Fixed','search':{'queries':['configured search']}}]
+        queries=[{'section_id':'fixture','query':'gap one'},
+                 {'section_id':'other','query':'required search'},
+                 {'section_id':'fixture','query':'gap two'}]
+        client=Mock();client.request.side_effect=[{'queries':queries},{'queries':queries},
+                                                {'candidates':[self.candidate()]}]
+        with patch('newspaper.bounded.discover',return_value=([self.index()],{})), \
+             patch('newspaper.bounded.search',return_value=[]) as search, \
+             patch('newspaper.bounded.fetch',return_value=[self.source]):
+            research(self.settings,client,self.window,self.root,{})
+        self.assertEqual(search.call_args.args[1],[
+            {'section_id':'fixed','query':'configured search'},*queries[:2]])
+
     def test_source_only_mode_avoids_both_planner_and_search_calls(self):
         self.settings.values['discovery']={'max_gap_queries':0}
         client=Mock();client.request.return_value={'candidates':[self.candidate()]}

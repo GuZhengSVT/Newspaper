@@ -116,7 +116,22 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
             if not errors:
                 queries.extend(proposed);break
             payload={**payload,'validation_errors':errors}
-        else:raise SearchPlanError(errors)
+        else:
+            # Optional gap searches may be omitted without losing source coverage.
+            # Keep mandatory searches and fixed queries; never repair malformed entries.
+            if {e['code'] for e in errors} <= {'total_limit','gap_limit'}:
+                combined=queries+proposed
+                removed=0
+                for index in range(len(combined)-1,len(queries)-1,-1):
+                    sid=combined[index]['section_id']
+                    if sid not in covered:continue
+                    combined.pop(index);removed+=1
+                    errors=plan_problems(combined,sections_by_id,mandatory,covered,limit,gap_limit)
+                    if not errors:
+                        queries=combined
+                        if diagnostics is not None:diagnostics['optional_queries_trimmed']=removed
+                        break
+            if errors:raise SearchPlanError(errors)
     errors=plan_problems(queries,sections_by_id,mandatory,covered,limit,gap_limit)
     if errors:raise SearchPlanError(errors)
     search_results=search(settings,queries,work,window) if queries else []

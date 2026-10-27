@@ -3,7 +3,7 @@
   config:
     provider: compatible
     model: YOUR_MODEL
-    reasoningEffort: high
+    reasoningEffort: low
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:

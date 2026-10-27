@@ -225,7 +225,8 @@ class DiscoveryTests(NewspaperCase):
     def test_candidate_short_id_cannot_refer_to_another_section(self):
         doc=copy.deepcopy(self.doc);doc['sections'][0]['articles'][0]['candidate_id']='c1'
         candidates=[{'candidate_id':'c1','event_key':'stable|event|key','section_id':'other'}]
-        with self.assertRaises(ValueError):restore_event_keys(doc,candidates)
+        with self.assertRaisesRegex(ValueError,"Candidate 'c1' belongs to section 'other'"):
+            restore_event_keys(doc,candidates)
 
     def test_format_retry_preserves_a_separate_semantic_repair_round(self):
         doc=self.issue('culture');original=copy.deepcopy(doc)
@@ -248,6 +249,7 @@ class DiscoveryTests(NewspaperCase):
             result=generate(settings,self.store,notify=False)
         self.assertEqual(result['state'],'published')
         self.assertEqual([c.args[0] for c in model.call_args_list],['edit','edit','review','repair','review'])
+        self.assertEqual(model.call_args_list[0].args[1]['candidate_ids_by_section'],{'fixture':['c1']})
         final=self.store.document(self.day+'/culture')['sections'][0]['articles'][0]
         self.assertEqual(final['event_key'],key)
         self.assertNotIn('candidate_id',final)

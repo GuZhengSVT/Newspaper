@@ -109,6 +109,12 @@ class Settings:
         if self.values.get('notifications',{}).get('mode','legacy') not in {'legacy','accounts'}:
             raise ValueError('Invalid notification mode')
         accounts(self)
+        alerts = self.values.get('notifications', {}).get('failure_alerts')
+        if alerts is not None:
+            if (not isinstance(alerts, dict) or set(alerts) != {'account_id'}
+                or not isinstance(alerts['account_id'], str)
+                or alerts['account_id'] not in {a['id'] for a in self.values.get('_accounts', [])}):
+                raise ValueError('Failure alerts require one known account_id')
         if account_mode(self) and not (self.values.get('project') or 'schedule' in self.values):
             raise ValueError('Account notifications require a project or schedule')
         if type(self.values.get('translation',{}).get('enabled',False)) is not bool:
@@ -117,6 +123,9 @@ class Settings:
             raise ValueError('Bilingual subscriptions require translation.enabled')
         ZoneInfo(self.values.get('project', {}).get('timezone', 'UTC'))
         self.editions  # Validate group/section assignment before any work begins.
+        model = self.values.get('model', {})
+        if model.get('manager_reasoning_effort', 'max') != 'max' or model.get('worker_reasoning_effort', 'low') != 'low':
+            raise ValueError('Board coordinators require max reasoning and task workers require low reasoning')
         discovery=self.values.get('discovery',{})
         for key,default,minimum,maximum in [('max_indexes_per_edition',32,1,128),('max_links_per_index',15,1,30),
                                           ('max_gap_queries',3,0,40),('max_previews_per_section',24,1,60)]:

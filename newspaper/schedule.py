@@ -37,6 +37,10 @@ def task_identity(cfg: dict, timezone: str) -> str:
     return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()[:20]
 
 
+def board_task_identity(group_id: str, cfg: dict, timezone: str) -> str:
+    return hashlib.sha256((group_id+'\0'+task_identity(cfg,timezone)).encode()).hexdigest()[:20]
+
+
 def previous_slot(end: datetime, cfg: dict) -> datetime:
     period = cfg.get('period', 'daily')
     if period == 'monthly':
@@ -95,7 +99,8 @@ def jobs(settings, now: datetime, manual: bool = False) -> list[tuple[dict,dict]
             # A generated job ID must not alias another top-level group's publication.
             if slug != group['id'] and slug in {g['id'] for g in settings.editions}:
                 raise ValueError('Scheduled publication id collides with a group id')
-            job={**group,'id':slug,'sections':ids,'schedule':cfg,'group_id':group['id'],'notify':notify,'task_id':task_identity(cfg,timezone)}
+            job={**group,'id':slug,'sections':ids,'schedule':cfg,'group_id':group['id'],'notify':notify,
+                 'task_id':board_task_identity(group['id'],cfg,timezone)}
             if slug != group['id']:job['name']=group['name']+' · '+' / '.join(s['name'] for s in sections)
             if manual:
                 suffix='-manual-'+end.strftime('%H%M%S')
@@ -104,3 +109,16 @@ def jobs(settings, now: datetime, manual: bool = False) -> list[tuple[dict,dict]
                 job['name']+=' · 手动刊'
             result.append((job,window))
     return result
+
+
+def scope_publication_history(settings, store):
+    """Keep retained deduplication history when migrating cadence-wide tasks to boards."""
+    rows=store.db.execute('''select p.day,p.task_id from publication_tasks p join editions e on e.day=p.day
+        where e.expires_at>?''', (datetime.now(settings.timezone).timestamp(),)).fetchall()
+    for row in rows:
+        doc=store.document(row['day'])
+        if not doc.get('window_end'):continue
+        section_ids={s['id'] for s in doc['sections']}
+        match=next((j for j,w in jobs(settings,datetime.fromisoformat(doc['window_end']))
+                    if set(j['sections'])==section_ids),None)
+        if match and match['task_id']!=row['task_id']:store.set_task(row['day'],match['task_id'])

@@ -28,6 +28,12 @@ def record_command(settings, store, command: str, error: Exception | None = None
 
 def incidents(store, now: float) -> list[tuple[str, str]]:
     result = []
+    if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='model_backoff'").fetchone():
+        for row in store.db.execute('SELECT * FROM model_backoff WHERE failures>=3'):
+            incident = f"model:{row['provider']}:{row['first_failure_at']}"
+            body = (f"模型供应商连接：{row['provider']}\n连续请求失败 {row['failures']} 次，已进入退避。\n"
+                    f"最近错误：{row['error_type']}。")
+            result.append((incident, body))
     failed = store.db.execute('''select day,count(*) as failures from runs
         where status='failed' and started_at>? group by day having count(*)>=3''',
         (now - 6 * 3600,)).fetchall()

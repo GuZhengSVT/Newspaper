@@ -8,7 +8,7 @@ Topics, sources, prompts and provider credentials belong to each installation. T
 
 ## Install
 
-Requires Python 3.11+, Node 26.12.1 (pinned in `.node-version`), and systemd/Caddy for the included VPS deployment.
+Requires Python 3.11+, Node 26.13.0 (pinned in `.node-version`), and systemd/Caddy for the included VPS deployment.
 
 The repository distributes application code, templates, static assets, prompts, tests and configuration examples. Installed dependencies are excluded from Git: `node_modules/` and `.venv/` are local installation directories and are not included in a clone or source download.
 
@@ -17,7 +17,7 @@ The repository distributes application code, templates, static assets, prompts, 
 | Python: httpx, Jinja2, jsonschema, markdown-it-py | `pyproject.toml` | `requirements.lock` |
 | Node.js: DeepSeek Harness, dsh-free-search, sharp, undici, proxy-agent and supporting packages | `package.json` | `package-lock.json` |
 
-Install the version in `.node-version` before running `make install`; CI and `package.json` use the same version.
+Install the Node version in `.node-version` before running `make install`; CI and `package.json` use the same version.
 
 `make install` creates the Python virtual environment and downloads both sets of dependencies from the lock files. Keep the manifests and lock files in Git so installations are reproducible. A source-publication checkout does not need installed dependencies to commit or push code; install them there only when running local checks or the application.
 
@@ -37,17 +37,18 @@ Edit the configuration files before generating news. Select an OpenAI-compatible
 ```bash
 export NEWSPAPER_CONFIG="$PWD/config.local.toml"
 export NEWSPAPER_CREDENTIALS="$PWD/credentials.env"
-export NEWSPAPER_DATA=/tmp/newspaper-data
-export NEWSPAPER_WEB=/tmp/newspaper-web
 .venv/bin/python -m newspaper.cli check-config
+.venv/bin/python -m newspaper.cli settings
 .venv/bin/python -m newspaper.cli schedule
 .venv/bin/python -m newspaper.cli doctor
-.venv/bin/python -m newspaper.cli build
-# Real research/model requests; publishes a website without email/Telegram:
-.venv/bin/python -m newspaper.cli run --no-notify
+mkdir -p ./private
+.venv/bin/python -m newspaper.cli preview --manual --output ./private/first-preview
+.venv/bin/python -m http.server --bind localhost --directory ./private/first-preview/web/current
 ```
 
-`check-config`, `schedule` and `doctor` make no model, search or notification requests. `schedule` shows the latest due reporting windows and the publications belonging to each delivery task. Empty enabled topics pause generation. `run --no-notify` is a real publication, skipped on subsequent runs; it is not later announced automatically.
+`check-config`, `settings`, `schedule` and `doctor` make no model, search or notification requests. `settings` shows the active config version, modes, budgets and readiness without endpoints, prompt text, private paths, credentials or delivery addresses. `schedule` shows the latest due reporting windows and the publications belonging to each delivery task.
+
+Each preview requires a fresh output directory and makes real research and model requests using the configured credentials. It writes its own database and site under that directory. The preview publishes locally within that directory and suppresses notifications. The local web server serves only the generated `web/current` tree. `run --no-notify` publishes to the configured site, records the issue in the production history and suppresses notification for that run.
 
 For an immediate end-to-end run, list all enabled delivery tasks with `schedule --manual`, then invoke `run --manual --task TASK_ID` one task at a time. Each command uses the existing retrieval, editing, verification, publication and notification pipeline. Manual issues have separate publication IDs and look back one configured period from the invocation time, without changing normal schedules or start dates. An explicit timezone-aware `--cutoff` can give multiple manual runs the same cutoff earlier that day.
 
@@ -76,7 +77,7 @@ Each section independently supports:
 - `sources`: independently fetched `rss` (RSS/Atom), `index` (HTML links, optionally narrowed by a `link_pattern` regex), or `page` (the URL itself); `enabled = false` temporarily skips one. Mark `required = true` to make failure to read a source fail that publication.
 - `discovery`: `max_indexes_per_edition` (1–128), `max_links_per_index` (1–30), `max_previews_per_section` (1–60, applied round-robin across publishers so an early source cannot crowd out the rest) and `max_gap_queries` (0–40, the total top-up search budget for sections that already have source coverage).
 
-Collection reads every enabled configured source **before** searching, then hands those results and their headlines to the planner so search only fills gaps. A section with no fixed queries must issue at least one search when no configured source produced an item inside the window; a section whose sources did produce items may skip search entirely. Only a source that actually yielded in-window items counts as covered, so a feed that was read successfully but had no update in the last 24 hours is still a gap.
+Collection reads every enabled configured source **before** searching, then hands those results and their headlines to the planner so search only fills gaps. A section with no fixed queries must issue at least one search when no configured source produced an item inside the window; a section whose sources did produce items may skip search entirely. Coverage requires a qualifying link and an in-window publication timestamp with a timezone from the same publisher. Date-only links, update times and search snippets can still enter selection. A feed with no qualifying link leaves a search gap.
 
 Planning receives explicit per-section limits and a feasible total budget. Invalid plans receive one correction attempt with structured constraint feedback; repeated violations stop the run and retain diagnostic counts, without storing response bodies. An empty preview selection triggers original-article checks from up to three distinct publishers within the existing fetch budget, followed by selection and empty-issue review. Failed original fetches still cannot produce a successful empty publication. When entity terms do not match a source language, or match only its header, evidence packing uses the available lead budget rather than cutting an otherwise complete abstract at the short lead boundary.
 
@@ -105,11 +106,13 @@ time = "09:00"
 
 A Monday 09:00 weekly report starts generation at that time and covers the preceding Monday 09:00 through this Monday 09:00. Delivery follows successful generation. `start_date` gates the first allowed publication date; the first report still has a complete lookback. Monthly days missing in a short month clamp to its last day. Late starts catch up only the latest due slot, without generating all missed issues.
 
-**Each top-level group works and sends independently, in configuration order.** A compact DeepSeek v4.1 flash coordinator uses `max` reasoning to delegate the group's tasks and approve a short result summary. Search planning, selection, editing, fact review, illustration and translation use isolated `low` requests. The coordinator receives section briefs and compact article metadata; source bodies and full drafts stay with the workers. Model usage records include group, role, reasoning effort and the provider's raw token/cache counters. Workers run serially, and delivery for the current group is attempted before starting the next group. Search caches are isolated between groups.
+**Each top-level group works and sends independently, in configuration order.** `[model] coordination = "configured"` delegates directly from project settings. With `coordination = "model"`, the coordinator uses `max` reasoning to delegate the group's tasks and approve a short result summary. Search planning, selection, editing, fact review, illustration and translation use isolated `low` requests. The coordinator receives section briefs and compact article metadata; source bodies and full drafts stay with the workers. Model usage records include group, role, reasoning effort and the provider's raw token/cache counters. Workers run serially, and delivery for the current group is attempted before starting the next group. Search caches are isolated between groups.
 
-Delivery tasks are scoped to both group and schedule. Different groups never share a message, even when their schedules match. Daily, weekly and monthly publications within a group remain separate. Event history is scoped to the group and schedule, so a daily story can also be considered for an independent weekly report. Retained history is migrated to these identities without reannouncing published issues.
+Set the optional `[model] max_tokens_per_edition` to pause new model requests once the edition reaches its recorded token allowance. Each edition combines the providers' reported `usage.total_tokens` across coordination, editing, retries and deferred translation. `status` shows `total_tokens`, `unreported_calls`, the configured `limit`, and whether that limit blocks further requests. A failed HTTP request, transport error or response with missing or invalid usage adds to `unreported_calls` and contributes zero recorded tokens. The request that crosses the threshold can exceed it. Usage inside the legacy DSH collection subprocess is unavailable to this counter. Provider backoff persists across processes and increases after each failed probe. With failure alerts enabled, three consecutive model calls that end in a retryable failure for an endpoint raise one incident until the endpoint responds successfully.
 
-A persistent batch records the expected publications for one group and schedule before generation, and recovers after partial failure or restart. Other groups do not delay its delivery. Successful channels are never resent. Known delivery failures retry only that channel, up to five attempts with backoff. If the provider may have accepted a message but acknowledgement is lost, the outbox becomes `uncertain` and is not automatically retried; inspect `status` and the provider before taking manual action. Telegram cannot offer an absolute exactly-once guarantee. Previously published previews/imported issues are not automatically announced.
+Delivery tasks are scoped to both group and schedule. Different groups never share a message, even when their schedules match. Daily, weekly and monthly publications within a group remain separate. Related events can link to a retained edition across schedules. A weekly edition can cite previously verified evidence. A follow-up in the same reporting task must identify a new claim and new evidence. Retained history is migrated to these identities without reannouncing published issues.
+
+A persistent batch records the expected publications for one group and schedule before publishing, and recovers after partial failure or restart. Other groups do not delay its delivery. Successful channels are never resent. Known delivery failures retry only that channel, up to five attempts with backoff. If the provider may have accepted a message but acknowledgement is lost, the outbox becomes `uncertain` and is not automatically retried; inspect `status` and the provider before taking manual action. Telegram cannot offer an absolute exactly-once guarantee. Issues published with `run --no-notify` or imported from legacy files are not automatically announced.
 
 Enable email/Telegram in runtime configuration. Credential variable names are in [.env.example](.env.example). SMTP uses an existing provider with STARTTLS or implicit TLS. Notifications contain the complete published news text and source references, with webpage links at the end. Email includes responsive HTML and plain-text alternatives. The HTML follows the website’s paper background, serif typography and fine rules in a mobile-friendly single column, with paired English and Chinese paragraphs. Telegram starts each article in a separate message and keeps sources with the text before optional photos; photo captions include attribution links. It uses escaped HTML, keeps a bilingual paragraph pair together when it fits, splits long text at paragraph boundaries within its [message limits](https://core.telegram.org/bots/api#sendmessage), and checkpoints acknowledged parts so a definite failure resumes without repeating them. Photos are separate, optional messages; rejected image URLs do not prevent text delivery. `notify = false` excludes a group or section from delivery while retaining web publication.
 
@@ -117,7 +120,7 @@ Each article may include one externally hosted image in HTML, Markdown, email an
 
 ## Homepage and feeds
 
-With `[translation] enabled = true`, each approved Chinese article is translated in one model call, without a model reviewer or feedback-driven rewriting. Original Chinese sentences are stored unchanged alongside English in `article.bilingual`. Local checks validate structure, sentence IDs, completeness and explicit calendar dates. Failures are recorded and retried by the job scheduler. The prompt requests faithful, idiomatic English, including accurate attribution, qualifications, numbers and terminology.
+With `[translation] enabled = true`, each approved Chinese article is translated in one model call, without a model reviewer or feedback-driven rewriting. Original Chinese sentences are stored unchanged alongside English in `article.bilingual`. Local checks validate structure, sentence IDs, completeness and explicit calendar dates. Failures are recorded. With `publish = "together"`, an issue waits for all translations. With `publish = "chinese_first"`, the approved Chinese issue goes live while the translation job completes individual articles. A bilingual destination waits for its subscribed translations and the published site. The prompt requests faithful, idiomatic English, including accurate attribution, qualifications, numbers and terminology.
 
 Sentence splitting preserves punctuation inside titles, quotations and brackets. A private checkpoint saves the approved Chinese, cited evidence and each completed article translation, so a failed attempt resumes without new research or retranslating completed articles. Checkpoints are excluded from public pages and notifications, removed after publication, and expire with their dated issue. Existing archives retain support for previously stored sentence boundaries.
 
@@ -145,28 +148,41 @@ The reading interface includes a contents outline, responsive layout, light/dark
 
 ## VPS operations
 
-Place the source at `/opt/Newspaper`, install dependencies, then run `sudo bash scripts/install-vps.sh`. This creates a service user and installs systemd/Caddy files. Review the configuration before enabling timers:
+### Build and install a source release
+
+`make release REF=<tag-or-commit>` exports the selected committed tree, embeds `release.toml` with its application version and full commit, and writes an archive and a SHA-256 checksum in `dist/`. To package version tags in CI, install `deploy/github/ci.yml` as `.github/workflows/ci.yml`. Packaging uses committed source and pinned dependency manifests.
+
+1. Verify the downloaded archive with `sha256sum -c <archive>.sha256` and extract it under `/opt`. The versioned directory is the service working directory. Keep it writable only by trusted deployment administrators.
+2. From the extracted directory, run `make install` with the pinned Node version and Python 3.11+. Make the pinned Node executable available on the service's PATH (`/usr/local/bin:/usr/bin:/bin`).
+3. Review `bash scripts/install-vps.sh init --dry-run --caddy` for a fresh installation or replace `init` with `upgrade` for an existing VPS. With `--caddy`, add the top-level line `import /etc/caddy/newspaper.caddy` to the existing `/etc/caddy/Caddyfile`. For a legacy installation, move its Newspaper site block to a separate source file and remove that block from the main config before adding the import. Pass `--caddy-site /path/to/site.caddy` to use that site block or set the domain before installation. Leave Caddy running on its loaded configuration during this edit.
+4. Run the same installer as root without `--dry-run`. On upgrade, stop all Newspaper timers and wait for active Newspaper services to finish first. The installer updates the service units to the new release directory and uses the existing private settings and state. With Caddy management enabled, it validates the combined Caddy config before replacing its independent site fragment. Reload Caddy yourself after installation. Omit the Caddy option when another service already provides the static origin.
 
 | Path | Contents |
 | --- | --- |
-| `/opt/Newspaper` | Generic source and installed dependencies |
+| Extracted release under `/opt` | Committed application with locked local dependencies |
 | `/etc/newspaper/config.toml` | Runtime configuration |
 | `/etc/newspaper/project.local.toml` | Private project preferences |
 | `/etc/newspaper/credentials.env` | Private credentials |
 | `/var/lib/newspaper` | SQLite, reports, evidence and temporary work |
-| `/srv/newspaper` | Atomic static website release |
+| `/srv/newspaper/current` | Atomic static website release |
+
+The supplied systemd units grant write access to the default state directories. If your deployment uses other paths, configure the corresponding `ReadWritePaths` in systemd drop-ins and point the static server at the chosen `web_dir/current`.
+
+From the extracted release directory, configure the files in `/etc/newspaper` and run these commands before enabling production scheduling:
 
 ```bash
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli check-config
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli schedule
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli build
+sudo -u newspaper .venv/bin/python -m newspaper.cli --version
+sudo -u newspaper .venv/bin/python -m newspaper.cli check-config
+sudo -u newspaper .venv/bin/python -m newspaper.cli settings
+sudo -u newspaper .venv/bin/python -m newspaper.cli schedule
+sudo -u newspaper .venv/bin/python -m newspaper.cli build
 sudo systemctl enable --now newspaper.timer newspaper-clean.timer newspaper-notify.timer
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli status
+sudo -u newspaper .venv/bin/python -m newspaper.cli status
 ```
 
-Run commands from the checkout or install the package into the virtual environment. The generation timer checks schedules every minute. Published slots are skipped. Failed publications wait at least five minutes and permit at most three failed attempts per six hours; other publications can proceed. Model transport/transient HTTP failures have their own three-request retry bound. A run has a 50-minute systemd timeout. The notify/cleanup timers run every five minutes; cleanup also runs at midnight and before generation. Process locking prevents overlapping writers.
+Existing configurations may omit `config_version` and the new mode fields. They default to version 1, local publication, model coordination and combined bilingual release. The fresh-install example uses configured coordination and Chinese-first release. For Pages mode, use an HTTPS website root for top-level `base_url` and enable `newspaper-publish.timer` once the Pages workflow is configured. Enable `newspaper-translate.timer` when `translation.enabled = true` and `translation.publish = "chinese_first"`. Disable an optional timer when its mode is retired. `status` shows the application release, site versions and the latest measured source-to-publication counts for each section. See [publication setup and verification](docs/publication.zh-CN.md).
 
-Set the top-level runtime `base_url` to the public HTTPS website domain (for example `https://news.example.com`); notification links and RSS use this origin, independently of `[model].base_url`. Run `build` after changing it to refresh RSS; future notifications read the new origin automatically. The included Caddyfile serves HTTP on port 80. Configure the domain, HTTPS/authentication and firewall access as appropriate. Only generated public files are exposed. API keys, evidence and administrative state are not web routes. Website builds switch atomically; a failed build preserves the previous complete release. Reviewed saved drafts resume without repeating model work.
+The generation timer checks schedules every minute. Published slots are skipped. Failed publications wait at least five minutes and permit at most three failed attempts per six hours. A run has a 50-minute systemd timeout. Notification retries and retention checks have separate timers. Remote confirmation runs independently of generation. Set top-level `base_url` to the public HTTPS site origin for RSS and delivery links and run `build` after changing it. The supplied Caddy fragment defaults to HTTP port 80. Configure its hostname and HTTPS for the deployment.
 
 ## Evidence and retention
 
@@ -174,7 +190,7 @@ The pipeline plans searches, shortlists provisional leads, fetches originals, ed
 
 Only selected evidence metadata, quotations and adjacent context are retained. Unselected pages, intermediate drafts and isolated DSH sessions/caches are deleted after the run; cleanup removes crash leftovers. Run metrics record counts, outcomes and usage without response bodies or credentials.
 
-Retention is 30 calendar dates in the configured project timezone, including the publication date. Rebuilds/retries do not extend it. Cleanup removes expired reports, evidence, web routes, downloads, RSS/search entries, events, notification batches, run records and superseded releases. SQLite uses secure deletion and vacuuming. News is never committed to Git, uploaded by CI or backed up by this application. Reader downloads and third-party provider copies are outside server deletion control.
+Retention is 30 calendar dates in the configured project timezone, including the publication date. Rebuilds/retries do not extend it. Cleanup removes expired reports, evidence, web routes, downloads, RSS/search entries, events, notification batches, run records and superseded releases. SQLite uses secure deletion and vacuuming. Direct hosting serves the files on the VPS. The optional Pages workflow uploads a verified site artifact with a one-day retention setting. Both modes can publish without committing articles to Git. Reader downloads and third-party provider copies are outside server deletion control.
 
 ## Development
 

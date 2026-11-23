@@ -14,6 +14,7 @@ import httpx
 from .config import Settings
 from .storage import Store, utcnow
 from .messages import news_message, text_chunks
+from .publication import delivery_ready
 
 
 def readiness(channel: str, *, recipient: str | None = None) -> bool:
@@ -104,6 +105,8 @@ def send_text(settings: Settings, channel: str, subject: str, text: str, deliver
 
 def deliver(settings: Settings, store: Store) -> dict:
     from .accounts import account_mode
+    from .batches import prepare_waiting
+    prepare_waiting(settings, store)
     if account_mode(settings):
         from .batches import deliver_batches
         return deliver_batches(settings,store)
@@ -111,11 +114,14 @@ def deliver(settings: Settings, store: Store) -> dict:
     interrupted=store.db.execute("UPDATE deliveries SET state='uncertain',last_error='InterruptedSend' WHERE state='sending'")
     uncertain=interrupted.rowcount;store.db.commit()
     rows = store.db.execute("""SELECT q.* FROM deliveries q JOIN editions e ON q.day=e.day
-        WHERE q.state IN ('pending','failed') AND q.attempts<5 AND q.next_attempt<=? AND e.status='published' AND e.expires_at>?""", (now, now)).fetchall()
+        WHERE q.state IN ('pending','failed') AND q.attempts<5 AND q.next_attempt<=? AND e.status='published'
+        AND e.notify_suppressed=0 AND e.expires_at>?""", (now, now)).fetchall()
     result = {"sent": 0, "failed": 0, "unconfigured": 0}
     if uncertain:result['uncertain']=uncertain
     for row in rows:
         channel = row["channel"]
+        if not delivery_ready(settings, store, [row['day']]):
+            continue
         if not settings.values.get("notifications", {}).get(channel, {}).get("enabled", False):
             continue
         if not readiness(channel):

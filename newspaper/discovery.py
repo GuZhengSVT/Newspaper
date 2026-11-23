@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree as ET
 
 from .research import fetch_page, page_text, source_url, publication_time
@@ -38,7 +38,7 @@ class IndexParser(HTMLParser):
             except ValueError:pass
             self.json_script=None
         if tag == 'a' and self.href is not None:
-            self.links.append((self.href,' '.join(' '.join(self.parts).split())))
+            self.links.append((self.href,' '.join(' '.join(self.parts).split()),None))
             self.href=None;self.parts=[]
 
     def structured_links(self, value):
@@ -49,7 +49,7 @@ class IndexParser(HTMLParser):
             title=value.get('headline',value.get('title',value.get('name')))
             if url and isinstance(title,str):
                 date=value.get('datePublished',value.get('date',''))
-                self.links.append((url,re.sub('<[^>]+>',' ',title)+' '+str(date)))
+                self.links.append((url,re.sub('<[^>]+>',' ',title)+' '+str(date),value.get('datePublished')))
             for item in value.values():
                 if isinstance(item,(dict,list)):self.structured_links(item)
 
@@ -68,9 +68,34 @@ def hinted_date(text: str) -> str | None:
     return None
 
 
+def publisher_timestamp(value) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        try:
+            stamp = parsedate_to_datetime(value)
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return stamp.isoformat() if stamp.tzinfo is not None else None
+
+
+def in_window(stamp: str | None, window: dict) -> bool:
+    if not stamp:
+        return False
+    try:
+        moment = datetime.fromisoformat(stamp)
+        start, end = (datetime.fromisoformat(window[k]) for k in ('window_start', 'window_end'))
+        return moment.tzinfo is not None and start <= moment < end
+    except (ValueError, TypeError):
+        return False
+
+
 def recent_links(content: str, base: str, window: dict, limit: int, *, link_pattern: str | None = None,
                  kind: str = 'auto', stats: dict | None = None) -> list[dict]:
     candidates=[]
+    provenance = 'feed'
     try:
         root=ET.fromstring(content)
         if root.tag.rsplit('}',1)[-1].lower() not in {'rss','feed','rdf'}:
@@ -80,46 +105,38 @@ def recent_links(content: str, base: str, window: dict, limit: int, *, link_patt
             links=item.findall('{*}link')
             link=next((v for v in links if v.get('rel','alternate')=='alternate'),None)
             url=(link.get('href') or link.text or '') if link is not None else ''
-            stamp=item.findtext('{*}pubDate') or item.findtext('{*}published') or item.findtext('{*}updated') or item.findtext('{*}date') or ''
-            date=hinted_date(stamp)
-            if not date:
-                try:date=parsedate_to_datetime(stamp).date().isoformat()
-                except (ValueError,TypeError):pass
+            published=item.findtext('{*}pubDate') or item.findtext('{*}published')
+            precise=publisher_timestamp(published)
+            date=hinted_date(precise or published or item.findtext('{*}updated') or item.findtext('{*}date') or '')
             description=item.findtext('{*}description') or item.findtext('{*}summary') or ''
-            precise = None
-            try:
-                stamp_time = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
-                if stamp_time.tzinfo is not None:precise = stamp_time.isoformat()
-            except ValueError:
-                try:
-                    stamp_time = parsedate_to_datetime(stamp)
-                    if stamp_time.tzinfo is not None:precise = stamp_time.isoformat()
-                except (ValueError,TypeError):pass
             candidates.append((url,title,date,title+' '+page_text(description,'html')[:500],precise))
     except ET.ParseError:
         if kind == 'rss' or re.search(r'<(?:rss|feed|rdf:RDF)\b',content[:1000],re.I):
             raise ValueError('Invalid or truncated publisher feed')
+        provenance = 'index'
         parser=IndexParser();parser.feed(content)
-        for url,title in parser.links:
+        for url,title,stamp in parser.links:
             date=hinted_date(title) or hinted_date(url)
             article_link=re.search(link_pattern,urljoin(base,url)) if link_pattern else re.search(r'/(blog|news|articles?|press)/[^/#?]+|/20\d{2}/\d{1,2}/[^/#?]+|/\d+/\d+/\d+\.htm',url)
-            if (date or (len(title)>=4 and article_link)) and (not link_pattern or article_link):
-                candidates.append((url,title,date,title,None))
+            if (stamp or date or (len(title)>=4 and article_link)) and (not link_pattern or article_link):
+                candidates.append((url,title,date,title,publisher_timestamp(stamp)))
         if kind == 'index' and not candidates:raise ValueError('No recognizable article links in publisher index')
     if stats is not None:stats['entries']=len(candidates)
     # Dated cards take precedence over navigation links without dates.
-    candidates.sort(key=lambda c:(c[2] is not None,c[2] or ''),reverse=True)
+    candidates.sort(key=lambda c:(in_window(c[4],window), window['window_start'][:10] <= (c[2] or '') <= window['date'], not c[2], c[2] or ''),reverse=True)
     known_dates={urljoin(base,c[0]):c[2] for c in candidates if c[2]}
     result={}
     for link,title,date,snippet,precise in candidates:
         date=date or known_dates.get(urljoin(base,link))
-        if date and not window['window_start'][:10]<=date<=window['date']:continue
         try:url=source_url(urljoin(base,link))
         except ValueError:continue
         if url==base or not title:continue
+        if urlsplit(url).hostname != urlsplit(base).hostname:precise=None
+        if precise and not in_window(precise,window):continue
+        if not precise and date and not window['window_start'][:10]<=date<=window['date']:continue
         result.setdefault(url,{'url':url,'title':title[:300],'snippet':snippet[:800],
                                'published_at':precise or date,'discovery_index':base,
-                               **({'publisher_published_at':precise} if precise else {})})
+                               **({'publisher_published_at':precise,'publisher_time_kind':provenance} if precise else {})})
         if len(result)>=limit:break
     return list(result.values())
 
@@ -150,11 +167,14 @@ def discover(settings, window: dict, work) -> tuple[list[dict],dict]:
                     if item.get('kind')=='page':
                         text=page_text(page['content'],page['kind'])
                         if len(text)<100:raise ValueError('Page has no usable content')
+                        stamp=publication_time(page['content']) if page['kind']=='html' else None
                         links=[{'url':url,'title':item.get('name',url),'snippet':text[:800],
-                                'published_at':publication_time(page['content']),'discovery_index':url}]
+                                'published_at':stamp,'publisher_published_at':stamp,
+                                'discovery_index':url}] if not stamp or in_window(stamp,window) else []
                     else:links=recent_links(page['content'],url,window,limit,kind=item.get('kind','index'),
                                             link_pattern=item.get('link_pattern'))
-                    result.update(engines_ok=1,sources=links,index_status='links' if links else 'no_recent_links')
+                    result.update(engines_ok=1,sources=links,index_status='links' if links else 'no_recent_links',
+                                  window_links=sum(in_window(link.get('publisher_published_at'),window) for link in links))
                 except (ValueError,KeyError) as exc:result['index_status']=type(exc).__name__
             results.append(result)
         return results
@@ -167,4 +187,4 @@ def discover(settings, window: dict, work) -> tuple[list[dict],dict]:
     return results,{'discovery_indexes':len(indexes),'discovery_requests':len(by_url),'discovery_indexes_ok':len(good_urls),
                  'discovery_links':sum(len(r['sources']) for r in good),
                  'publisher_indexes':[{'section_id':r['section_id'],'url':r['index_url'],
-                                       'status':r['index_status'],'links':len(r['sources'])} for r in results]}
+                                       'status':r['index_status'],'links':len(r['sources']),'window_links':r.get('window_links',0)} for r in results]}

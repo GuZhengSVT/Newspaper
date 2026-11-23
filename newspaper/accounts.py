@@ -6,6 +6,7 @@ import json
 import re
 
 from .notify import readiness, send_text, UncertainDelivery
+from .publication import delivery_ready
 from .storage import utcnow
 
 
@@ -116,6 +117,12 @@ def deliver_accounts(settings, store) -> dict:
             # Freeze content/progress for retries; a preference change cancels the old delivery.
             store.db.execute("update account_outbox set state='cancelled' where batch_id=? and account_id=? and channel=? and recipient=?",identity)
             store.db.commit();continue
+        documents = account_documents(store, batch, options)
+        if not delivery_ready(settings, store, [key for key, _ in documents]):
+            continue
+        if any(options[section['id']] and any(not a.get('bilingual') for a in section['articles'])
+               for _, doc in documents for section in doc['sections']):
+            continue
         store.db.execute("update account_outbox set state='sending',attempts=attempts+1 where batch_id=? and account_id=? and channel=? and recipient=?",identity)
         store.db.commit()
         def checkpoint(part):
@@ -123,7 +130,7 @@ def deliver_accounts(settings, store) -> dict:
             store.db.commit()
         try:
             subject=batch_subject(settings,batch)
-            message=news_message(settings,account_documents(store,batch,options),subject,
+            message=news_message(settings,documents,subject,
                                  notice=batch['correction_note'],bilingual_sections={sid for sid,v in options.items() if v})
             delivery_id=row['batch_id']+'-'+hashlib.sha256((aid+'\0'+channel+'\0'+recipient).encode()).hexdigest()[:24]
             send_text(settings,channel,subject,message['text'],delivery_id,recipient=recipient,

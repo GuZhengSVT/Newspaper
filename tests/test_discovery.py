@@ -159,6 +159,7 @@ class DiscoveryTests(NewspaperCase):
     def test_global_affected_list_cannot_rewrite_an_approved_article(self):
         doc=self.issue('culture');one=doc['sections'][0]['articles'][0]
         one['candidate_id']='c1';two=copy.deepcopy(one);two.update(event_key='fixture|second|event',candidate_id='c2')
+        two['facts'][0]['text']='第二个独立事件的离线测试事实。'
         doc['sections'][0]['articles'].append(two);keys=[one['event_key'],two['event_key']]
         candidates=[{'event_key':k,'entities':['Fixture Product'],'section_id':'fixture','importance':'重要',
                      'source_ids':['s1']} for k in keys]
@@ -287,6 +288,21 @@ class DiscoveryTests(NewspaperCase):
         self.assertEqual(doc,original)
         patch['articles'][0]['facts'][0]['index']=99
         with self.assertRaises(ValueError):compact_articles(doc,patch,{article['event_key']})
+
+    def test_directory_counts_only_same_publisher_publication_time_in_half_open_window(self):
+        content = f"""
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry><title>At start</title><link href="/first"/><published>{self.window['window_start']}</published></entry>
+          <entry><title>At end</title><link href="/last"/><published>{self.window['window_end']}</published></entry>
+          <entry><title>Edited</title><link href="/edited"/><updated>{self.source['published_at']}</updated></entry>
+          <entry><title>Elsewhere</title><link href="https://second.test/report"/><published>{self.source['published_at']}</published></entry>
+        </feed>
+        """
+        links = recent_links(content, 'https://example.test/feed', self.window, 10)
+        self.assertEqual({row['url'] for row in links}, {
+            'https://example.test/first', 'https://example.test/edited', 'https://second.test/report'})
+        self.assertEqual({row['url'] for row in links if row.get('publisher_published_at')},
+                         {'https://example.test/first'})
 
 
 if __name__=='__main__':unittest.main()

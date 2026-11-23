@@ -89,7 +89,7 @@ def prepare_profile(work: Path, settings: Settings) -> tuple[Path, dict]:
 def collect(settings: Settings, section: dict, window: dict, work: Path, supplement: str = "") -> dict:
     work.mkdir(parents=True)
     overlay, env = prepare_profile(work, settings)
-    prompt = (ROOT / "prompts" / "collect.md").read_text() + "\n\n输入：\n" + json.dumps({
+    prompt = settings.bundled_prompt('collect') + "\n\n输入：\n" + json.dumps({
         "section": section, **window, "supplement": supplement,
         "max_sources": settings.values.get("search", {}).get("max_sources_per_section", 8),
         "query_count": section.get("query_count", settings.values.get("search", {}).get("queries_per_section", 3)),
@@ -200,7 +200,8 @@ def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None
         feed_url = candidate.get('discovery_index', '')
         if not published and feed_stamp and urlsplit(feed_url).hostname == urlsplit(url).hostname:
             published = feed_stamp
-            basis = '发布者 RSS 发布时间（' + feed_url + '）'
+            basis = ('发布者目录结构化发布时间' if candidate.get('publisher_time_kind') == 'index'
+                     else '发布者 RSS 发布时间') + '（' + feed_url + '）'
         if published:text = basis + ': ' + published + '\n' + text
         from .images import source_images
         return {"id": "s-" + hashlib.sha256(url.encode()).hexdigest()[:16], "url": url,
@@ -211,19 +212,23 @@ def fetch_source(settings: Settings, candidate: dict, work: Path) -> dict | None
         return None
 
 
-def gather(settings: Settings, section: dict, window: dict, work: Path, supplement: str = "", cache: dict | None = None) -> dict:
+def gather(settings: Settings, section: dict, window: dict, work: Path, supplement: str = "", cache: dict | None = None,
+           *, budget=None) -> dict:
     raw = collect(settings, section, window, work, supplement)
     candidates = {}
     for item in raw["sources"]:
         if not isinstance(item, dict):
             continue
         try:
-            candidates[source_url(item["url"])] = item
+            url = source_url(item["url"])
+            candidates[url] = {**item, 'url': url}
         except (ValueError, KeyError, TypeError):
             continue
     limit = settings.values.get("search", {}).get("max_sources_per_section", 8)
     cache = cache if cache is not None else {}
     selected = list(candidates)[:limit]
+    if budget is not None:
+        selected = [item['url'] for item in budget.take_fetches(candidates[url] for url in selected)]
     missing = [candidates[url] for url in selected if url not in cache]
     with ThreadPoolExecutor(max_workers=2) as pool:
         fetched = list(pool.map(lambda c: fetch_source(settings, c, work), missing))

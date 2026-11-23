@@ -1,4 +1,5 @@
 # Runtime configuration. Copy alongside project.local.toml outside Git.
+config_version = 1
 project_file = "project.local.toml"
 data_dir = "/var/lib/newspaper"
 web_dir = "/srv/newspaper"
@@ -7,9 +8,16 @@ base_url = "https://news.example.com"
 retention_days = 30
 accounts_file = "accounts.local.toml"
 
+[publication]
+# local serves the atomic website at web_dir/current; pages confirms each deployment publicly.
+mode = "local"
+# repository = "owner/repo"
+# ref = "main"
+
 [translation]
-# Translate each approved Chinese article once before publishing.
 enabled = true
+# together waits for translations; chinese_first releases verified Chinese first.
+publish = "chinese_first"
 
 [model]
 provider = "compatible"
@@ -18,12 +26,16 @@ base_url = "https://api.example.com/v1"
 api_key_env = "NEWSPAPER_API_KEY"
 timeout_seconds = 180
 max_tokens = 12000
+# max_tokens_per_edition = 100000
 manager_reasoning_effort = "max"
 worker_reasoning_effort = "low"
+# configured delegates using the project configuration; model uses the model coordinator.
+coordination = "configured"
 
 [search]
 mode = "bounded"
 engines = ["bing", "keenable", "exa"]
+max_queries_per_edition = 40
 max_candidates_per_edition = 12
 max_fetches_per_edition = 24
 timeout_seconds = 35

@@ -8,7 +8,7 @@
 
 ## 安装与配置
 
-需要 Python 3.11+、Node 26.12.1（统一锁定在 `.node-version`）；附带的 VPS 部署还需要 systemd、Caddy。
+需要 Python 3.11+、Node 26.13.0（统一锁定在 `.node-version`）；附带的 VPS 部署还需要 systemd、Caddy。
 
 仓库提供程序代码、模板、静态资源、提示词、测试和配置示例。安装后的依赖不提交到 Git：`node_modules/` 和 `.venv/` 是本地安装目录，克隆仓库或下载源码时不会包含它们。
 
@@ -46,17 +46,18 @@ cp accounts.example.toml accounts.local.toml
 ```bash
 export NEWSPAPER_CONFIG="$PWD/config.local.toml"
 export NEWSPAPER_CREDENTIALS="$PWD/credentials.env"
-export NEWSPAPER_DATA=/tmp/newspaper-data
-export NEWSPAPER_WEB=/tmp/newspaper-web
 .venv/bin/python -m newspaper.cli check-config
+.venv/bin/python -m newspaper.cli settings
 .venv/bin/python -m newspaper.cli schedule
 .venv/bin/python -m newspaper.cli doctor
-.venv/bin/python -m newspaper.cli build
-# 真实检索、调用模型并发布网页，不推送邮件/TG：
-.venv/bin/python -m newspaper.cli run --no-notify
+mkdir -p ./private
+.venv/bin/python -m newspaper.cli preview --manual --output ./private/first-preview
+.venv/bin/python -m http.server --bind localhost --directory ./private/first-preview/web/current
 ```
 
-前三条检查命令不检索、不调用模型、不发送消息。`schedule` 展示最近应生成的时段、输出文件标识和推送任务分组。`--no-notify` 仍会正式发布网页，重复运行跳过已发布内容，之后也不会自动补推送。没有启用板块时暂停生成。
+`check-config`、`settings`、`schedule` 和 `doctor` 不检索、不调用模型、不发送消息。`settings` 显示配置版本、生效模式、预算与凭据就绪状态，隐藏接口地址、提示词、私有目录、密钥和收件地址。`schedule` 展示最近应生成的时段、输出文件标识和推送任务分组。
+
+每次预览使用新的输出目录，使用配置中的检索和模型凭据执行实际采编，在该目录写入独立的数据库和网站。预览不会同步公网或发推送，本地网页服务器只提供 `web/current` 中的文件。`run --no-notify` 正式发布到配置指定的网站并记录刊期，仅跳过该次推送。
 
 立即测试尚未到期的任务时，先用 `.venv/bin/python -m newspaper.cli schedule --manual` 查看全部启用的推送任务，再逐个执行 `.venv/bin/python -m newspaper.cli run --manual --task TASK_ID`。每次命令运行该任务的全部发布内容，并经过原有检索、编辑、核验、建站和推送流程；一个命令结束后再启动下一个。手动刊使用独立发布 ID，日报回溯一日、周报回溯一周，截止于启动时刻。可用带时区的 `--cutoff` 为当天多组手动任务固定相同截止时间；手动运行不修改原定周期、时刻和首次发布日期。
 
@@ -74,7 +75,7 @@ export NEWSPAPER_WEB=/tmp/newspaper-web
 - `sources`：`rss` 支持 RSS/Atom，`index` 从网页目录发现链接（`link_pattern` 可用正则限定文章链接），`page` 查阅该网址本身；`enabled = false` 可临时停用。`required = true` 表示必须成功读取，读取失败会使该份发布失败，不冒充已查阅。
 - `discovery`：`max_indexes_per_edition`（目录预算，1–128）、`max_links_per_index`（每个目录取链上限，1–30）、`max_previews_per_section`（每板块进入初筛的候选上限，1–60，按发布者轮转取，不偏向排在前面的来源）、`max_gap_queries`（对已有来源覆盖的板块额外补搜的总量上限，0–40）。
 
-采集顺序是**先读配置来源、后搜索**：所有启用的目录和 feed 会先被读取，其结果与标题摘要交给检索规划，搜索只用于补缺口。`search.queries` 为空的板块若在窗口内没有从来源取得任何条目，则必须至少搜索一次；已取得条目的板块可完全不搜索。只有一个来源在窗口内真的产出了条目才算「已覆盖」，读取成功但 24 小时内无更新的源仍算缺口。没有近期条目不等于抓取失败，但来源主题狭窄、关键站点读取失败或内容截断时会优先补查。
+采集顺序是**先读配置来源、后搜索**：所有启用的目录和 feed 会先被读取，其结果与标题摘要交给检索规划，搜索只用于补缺口。`search.queries` 为空的板块若在窗口内没有从来源取得任何条目，则必须至少搜索一次；已取得条目的板块可完全不搜索。只有未被板块规则排除、且同站发布者提供了带时区的窗口内发布时间的链接才计为已覆盖；只有日期、更新时间或搜索摘要的链接仍可参与初筛，读取成功但 24 小时内无更新的源仍算缺口。没有近期条目不等于抓取失败，但来源主题狭窄、关键站点读取失败或内容截断时会优先补查。
 
 规划输入明确列出每板块查询上限，总预算取实际可用容量。不合规规划由程序携带具体约束错误自动修正一次，仍不合规则终止并在运行记录保存错误代码、计数与上限。初筛无合格候选时，在既有抓取预算内检查最多三个不同发布者的原文，再复查候选并审核空刊；原文全部抓取失败仍拒绝发布。证据上下文中的中文实体名未命中英文原文，或只匹配到页面头部时，使用完整的上下文字符预算保留前文，避免在摘要开头就截断核心结果。
 
@@ -103,11 +104,13 @@ time = "09:00"
 
 周一 09:00 周报会在周一 09:00 开始生成，内容覆盖前一个周一 09:00 至本次周一 09:00，成功后推送。`start_date` 限定最早允许发布的日期，首期仍查阅完整前一周期。月度日期超过当月天数时使用当月最后一天。停机后只补最近一期，不连续生成全部错过的期数。
 
-**各一级板块独立工作、独立推送，按配置顺序串行完成。** 每个板块由 DeepSeek v4.1 flash 以 `max` 推理强度统筹，先分派任务，再根据精简结果决定发布内容。搜索规划、整理筛选、编辑、事实判断、配图和翻译使用独立的 `low` 请求。统筹只接收子板块任务和新闻精简摘要，完整来源、正文留在执行任务中，避免主上下文持续增长。板块内的执行任务也串行调用，当前板块完成并尝试推送后再开始下一个，检索缓存按板块隔离。调用记录包含板块、角色、推理强度和供应商原始用量、缓存字段。
+**各一级板块独立工作、独立推送，按配置顺序串行完成。** `[model] coordination = "configured"` 按项目配置分派并汇总各板块。`coordination = "model"` 由模型以 `max` 推理强度统筹，先分派任务，再根据精简结果决定发布内容。搜索规划、整理筛选、编辑、事实判断、配图和翻译使用独立的 `low` 请求。统筹只接收子板块任务和新闻精简摘要，完整来源、正文留在执行任务中，避免主上下文持续增长。板块内的执行任务也串行调用，当前板块完成并尝试推送后再开始下一个，检索缓存按板块隔离。调用记录包含板块、角色、推理强度和供应商原始用量、缓存字段。
 
-推送任务按“一级板块＋周期及起始设置”隔离；即使时间相同，不同一级板块也不合并消息。同一板块内的日报、周报、月报仍分别生成和推送，历史去重也按板块和周期隔离。旧历史会迁移到新任务标识，已发布内容不会因此重新推送。
+可设置 `[model] max_tokens_per_edition`。同一期的统筹、采编、重试和后台续译合计供应商报告的 `usage.total_tokens`，达到设定值后暂停发起新的模型请求。`status` 可查看各期的 `total_tokens`、`unreported_calls`、配置额度 `limit` 及额度是否已用尽。传输异常、HTTP 失败或缺少有效用量的响应记入 `unreported_calls`，按零计入本期已知用量。触及阈值的单次请求可能超出剩余额度，旧 DSH 采集子进程内部的模型用量也无法取得。供应商退避跨进程保留，探测失败后增加等待时间。启用流程告警时，同一端点连续三次模型调用以可重试故障结束会触发一项告警，直到端点恢复。
 
-任务先持久记录同一板块、同一周期应生成的内容，完成后独立推送；部分失败或进程重启会继续恢复，不等待其他一级板块。已确认成功的渠道不重复发送，仅对明确失败的渠道按退避间隔重试，最多五次。如果连接中断导致无法确认对方是否已接收，状态设为 `uncertain`，停止自动重发。需通过 `status` 和实际收件情况核实，避免为了重试而重复发送。Telegram 无法提供绝对的端到端恰好一次保证。迁移的已发布内容和无推送预览不会自动补发。
+推送任务按“一级板块＋周期及起始设置”隔离；即使时间相同，不同一级板块也不合并消息。同一板块内的日报、周报、月报仍分别生成和推送，同一事件可跨刊关联，周报仍可引用日报已核验的证据。同一周期的进展须给出新增事实和新证据。旧历史会迁移到新任务标识，已发布内容不会因此重新推送。
+
+任务先持久记录同一板块、同一周期应生成的内容，完成后独立推送；部分失败或进程重启会继续恢复，不等待其他一级板块。已确认成功的渠道不重复发送，仅对明确失败的渠道按退避间隔重试，最多五次。如果连接中断导致无法确认对方是否已接收，状态设为 `uncertain`，停止自动重发。需通过 `status` 和实际收件情况核实，避免为了重试而重复发送。Telegram 无法提供绝对的端到端恰好一次保证。迁移的已发布内容和使用 `run --no-notify` 发布的内容不会自动补发。
 
 在运行配置中启用邮件或 TG，密钥变量见 [.env.example](.env.example)。SMTP 使用已有邮箱服务，支持 STARTTLS/SSL。推送包含新闻完整正文与来源，末尾附对应网页链接；不发送内部摘要、证据引文和审核记录。邮件包含响应式 HTML 与纯文本两个版本；HTML 沿用网站的纸色底、衬线报头、宋体正文和细线分隔，采用适合手机阅读的单栏布局，中英段落依次对应。Telegram 使用基础 HTML 排版，每条新闻单独成段，来源随正文发送，配图附来源链接；长文按段落及 UTF-16 长度拆分，能容纳的一组中英段落保持在同一条消息中，逐条记录发送进度，明确失败后从未发送部分继续；链接预览关闭，已确认成功的部分不重发。照片单独发送，外链失效或被防盗链拦截时跳过图片，继续发送正文。[Telegram 平台限制](https://core.telegram.org/bots/api#sendmessage)为正文最多 4096 字符、照片说明最多 1024 字符，程序预留余量。`notify = false` 保留网页生成，但从推送内容中排除该板块。
 
@@ -117,7 +120,7 @@ time = "09:00"
 
 ### 中英对译
 
-`[translation] enabled = true` 在中文新闻通过事实复核后，每篇文章独立调用一次模型，生成英文标题与逐句英文，不再调用模型审核或反馈重译。英文以准确、自然、清晰为目标，保留原稿的归因、限定和不确定性。中文原句由程序直接保留，程序检查译文结构、句子编号、完整性和明确日期。失败记录原因，由任务调度重试。
+`[translation] enabled = true` 在中文新闻通过事实复核后，每篇文章独立调用一次模型，生成英文标题与逐句英文，不再调用模型审核或反馈重译。英文以准确、自然、清晰为目标，保留原稿的归因、限定和不确定性。中文原句由程序直接保留，程序检查译文结构、句子编号、完整性和明确日期。失败记录原因。`publish = "together"` 等待整期译文齐备。`publish = "chinese_first"` 先发布已复核的中文，译文由续译任务按篇补齐。要求双语的收件地址等订阅文章的译文及网页发布就绪后再发送。
 
 分句保留书名号、引号及括号内的标点，避免把作品名中的感叹号切成多句。翻译前保存私有的已审中文、引用证据及逐篇完成的译文；失败重试从此检查点继续，不重新采编或重译已完成的文章。检查点不参与公开网页或消息，发布成功后删除，并随新闻日期到期清理。已发布历史稿的旧分句格式仍可读取。
 
@@ -162,28 +165,41 @@ subscriptions = [
 
 ## VPS 部署和维护
 
-源码放在 `/opt/Newspaper` 并安装依赖，运行 `sudo bash scripts/install-vps.sh`，再修改 `/etc/newspaper` 内的配置后启用定时器。
+### 构建和安装源码发布包
+
+`make release REF=<标签或提交>` 导出指定的 Git 提交，写入包含程序版本和完整提交号的 `release.toml`，并在 `dist/` 生成压缩包和 SHA-256 校验文件。需要从标签自动打包时，将 `deploy/github/ci.yml` 安装为 `.github/workflows/ci.yml`。发布包包含源码及锁定依赖清单。
+
+1. 下载所需版本，用 `sha256sum -c <压缩包>.sha256` 校验并解包到 `/opt` 下。systemd 使用该版本目录作为工作目录，目录写权限只授予可信部署管理员。
+2. 在解包目录使用固定版本的 Node 和 Python 3.11+ 运行 `make install`。确保服务的 PATH（`/usr/local/bin:/usr/bin:/bin`）可找到固定版本的 Node。
+3. 首次安装执行 `bash scripts/install-vps.sh init --dry-run --caddy` 查看计划，升级时把 `init` 改成 `upgrade`。使用 `--caddy` 时，在现有 `/etc/caddy/Caddyfile` 添加一行顶层 `import /etc/caddy/newspaper.caddy`。旧安装先把原有 Newspaper 站点块移到单独源文件，再把主配置中该站点块换成这条导入。用 `--caddy-site /path/to/site.caddy` 指定该文件或配置好域名的片段。编辑期间让 Caddy 继续使用已加载的配置。
+4. 用 root 去掉 `--dry-run` 执行安装。升级前先停止 Newspaper 定时器，等正在运行的 Newspaper 服务退出。升级将 systemd 单元指向新版本目录，继续使用原有私有配置及状态数据。启用 Caddy 管理时，安装器先验证组合配置，再替换独立片段。安装完成后再重载 Caddy。由其他服务提供静态源站时可省略 Caddy 选项。
 
 | 路径 | 内容 |
 | --- | --- |
-| `/opt/Newspaper` | 通用源码及依赖 |
+| `/opt` 下的解包目录 | 指定提交的源码和本地锁定依赖 |
 | `/etc/newspaper/config.toml` | 运行配置 |
 | `/etc/newspaper/project.local.toml` | 私有项目偏好 |
 | `/etc/newspaper/credentials.env` | 密钥及收件人 |
 | `/var/lib/newspaper` | 数据库、新闻、证据、临时目录 |
-| `/srv/newspaper` | 当前静态网站 |
+| `/srv/newspaper/current` | 当前静态网站 |
+
+附带 systemd 单元只为默认状态目录授予写权限。若部署使用自定义路径，在 systemd drop-in 中配置相应的 `ReadWritePaths`，并将静态站点根目录指向所选的 `web_dir/current`。
+
+在解包目录执行以下命令，启用生产调度前先编辑并核对 `/etc/newspaper` 中的配置。
 
 ```bash
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli check-config
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli schedule
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli build
+sudo -u newspaper .venv/bin/python -m newspaper.cli --version
+sudo -u newspaper .venv/bin/python -m newspaper.cli check-config
+sudo -u newspaper .venv/bin/python -m newspaper.cli settings
+sudo -u newspaper .venv/bin/python -m newspaper.cli schedule
+sudo -u newspaper .venv/bin/python -m newspaper.cli build
 sudo systemctl enable --now newspaper.timer newspaper-clean.timer newspaper-notify.timer
-sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli status
+sudo -u newspaper .venv/bin/python -m newspaper.cli status
 ```
 
-命令在源码目录执行，或先将项目安装到虚拟环境。定时器每分钟检查任务，已发布时段直接跳过。单份失败至少等五分钟，六小时内最多三次失败尝试，不影响其他份继续运行。模型瞬时网络/HTTP 错误另有最多三次请求重试；systemd 单轮最长50分钟。推送重试、清理每五分钟运行，午夜及生成前也清理。所有写入任务共用进程锁。
+旧配置可省略 `config_version` 和新模式字段，默认使用配置版本 1、本地发布、模型统筹、中英对译齐发。新安装样例选择配置统筹和中文先发。使用 Pages 时，`base_url` 必须是 HTTPS 网站根地址，配置 Pages 工作流后启用 `newspaper-publish.timer`。启用翻译且设为 `translation.publish = "chinese_first"` 时启用 `newspaper-translate.timer`。切换模式时停用对应的可选定时器。`status` 展示应用版本、站点版本和各板块最近一次可用的来源到刊发计数。详见[发布配置与检查](docs/publication.zh-CN.md)。
 
-将运行配置顶层 `base_url` 设为网站的 HTTPS 域名（如 `https://news.example.com`），推送阅读链接和 RSS 均使用此地址；它独立于 `[model].base_url`。修改后执行 `build` 更新 RSS，后续推送自动使用新地址。附带 Caddy 配置使用80端口 HTTP，请按部署配置域名、HTTPS、访问认证及防火墙。网站只暴露生成的公开文件，不暴露密钥、证据或管理接口。网站原子切换，构建失败保留上一完整版本；已复核的保存稿件恢复发布时不重新调用模型。
+生成定时器每分钟检查任务，已发布时段直接跳过。单份失败至少等五分钟，六小时内最多三次失败尝试。systemd 单轮最长 50 分钟。推送重试和到期清理各有定时器，远端确认独立于新闻生成。推送链接和 RSS 使用顶层 `base_url`，变更后执行 `build`。附带 Caddy 片段默认监听 80 端口，可按部署设置域名与 HTTPS。
 
 ## 核验和保留期限
 
@@ -191,7 +207,7 @@ sudo -u newspaper /opt/Newspaper/.venv/bin/python -m newspaper.cli status
 
 仅保留入选来源元数据、引文和相邻上下文。未入选网页、中间稿、DSH 会话/缓存在单次任务结束后删除，异常残留由清理任务回收。运行指标只留计数、结果和用量，不留响应正文或凭据。
 
-保留发布当日及此前规则对应的30个日历日期，以项目时区计算；重建和重试不延长寿命。清理涵盖过期正文、证据、网页、下载、RSS、搜索索引、事件、推送队列、运行记录和旧网站版本，SQLite 使用安全删除并回收空间。新闻不进入 Git、不作为 CI 产物上传，本项目不备份新闻。读者下载和第三方服务已保存的副本不受服务器删除控制。
+保留发布当日及此前规则对应的30个日历日期，以项目时区计算；重建和重试不延长寿命。清理涵盖过期正文、证据、网页、下载、RSS、搜索索引、事件、推送队列、运行记录和旧网站版本，SQLite 使用安全删除并回收空间。直供模式将公开文件保存在 VPS。使用 Pages 时，工作流上传经摘要校验的站点产物，产物保留期设为一天。两种模式均无需把新闻正文提交到 Git。读者下载和第三方服务已保存的副本不受服务器删除控制。
 
 `make check test` 使用合成资料和模拟发送，离线检查日历、板块串行处理与独立推送、防重复、重启恢复、筛选、证据、首页、清理与渲染，不发送真实邮件/TG。保留有用回归测试，仅清理临时探针和缓存。依赖固定在两个 lock 文件中，升级时同步检查 DSH 配置；当前使用 DSH 0.2.1-rc.4，保留并升级 dsh-free-search 至 0.9.17。
 

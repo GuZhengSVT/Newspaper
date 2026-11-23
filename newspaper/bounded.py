@@ -13,13 +13,49 @@ from .config import ROOT
 from .evidence import validate_selection, context
 from .model import parse_json
 from .research import source_url, fetch_source
-from .discovery import discover
+from .discovery import discover, in_window
 
 
 class SearchPlanError(ValueError):
     def __init__(self, problems):
         super().__init__('Invalid search plan or missing section: '+', '.join(p['code'] for p in problems))
         self.problems=problems
+
+
+class SearchBudget:
+    def __init__(self, settings):
+        self.query_limit = settings.values.get('search', {}).get('max_queries_per_edition', 40)
+        self.fetch_limit = settings.values.get('search', {}).get('max_fetches_per_edition', 24)
+        self.queries = 0
+        self.fetch_urls = set()
+        self.url_ids = {}
+        self.originals_by_section = {}
+
+    @property
+    def remaining_queries(self):
+        return self.query_limit - self.queries
+
+    def take_queries(self, count):
+        if count > self.remaining_queries:
+            raise ValueError('Search query budget exhausted')
+        self.queries += count
+
+    def take_fetches(self, candidates):
+        selected = {}
+        for candidate in candidates:
+            try:
+                url = source_url(candidate['url'])
+            except (KeyError, ValueError):
+                continue
+            if url not in self.fetch_urls and len(self.fetch_urls) >= self.fetch_limit:
+                continue
+            self.fetch_urls.add(url)
+            selected.setdefault(url, candidate)
+        return list(selected.values())
+
+    def identify(self, source):
+        url = source_url(source['url'])
+        return {**source, 'id': self.url_ids.setdefault(url, 's'+str(len(self.url_ids)+1))}
 
 
 def plan_problems(queries, sections, mandatory, covered, limit, gap_limit):
@@ -69,20 +105,37 @@ def fetch(settings, candidates: list[dict], work: Path, cache: dict) -> list[dic
     return list(unique.values())
 
 
-def research(settings, client, window: dict, work: Path, cache: dict, diagnostics: dict | None = None) -> tuple[list,list,list,list,dict]:
+def excluded_preview(section: dict, item: dict) -> bool:
+    text = (item.get('title', '') + ' ' + item.get('snippet', '')).casefold()
+    return any(word.casefold() in text for word in section.get('filter', {}).get('exclude_keywords', []) if word)
+
+
+def research(settings, client, window: dict, work: Path, cache: dict, diagnostics: dict | None = None, *, budget: SearchBudget | None = None) -> tuple[list,list,list,list,dict]:
+    budget = budget if budget is not None else SearchBudget(settings)
     section_ids={s['id'] for s in settings.sections}
     sections_by_id={s['id']:s for s in settings.sections}
     names={s['id']:s['name'] for s in settings.sections}
     indexes,discovery_metrics=discover(settings,window,work)
     if diagnostics is not None:diagnostics.update(discovery_metrics)
-    # Only a source that yielded recent links counts as coverage. A feed that was read but
-    # had nothing inside the window still leaves a gap the planner must fill by searching.
-    covered={r['section_id'] for r in indexes if r.get('index_status')=='links' and r.get('sources')}
+    # Preview dates are leads. Only publisher publication timestamps establish coverage.
+    window_urls={sid:set() for sid in section_ids}
+    for row in indexes:
+        if not row['engines_ok']:
+            continue
+        window_urls[row['section_id']].update(source_url(item['url']) for item in row['sources']
+            if in_window(item.get('publisher_published_at'), window)
+            and not excluded_preview(sections_by_id[row['section_id']], item))
+    covered={sid for sid, urls in window_urls.items() if urls}
+    funnel = {sid: {'indexes_read': sum(r['section_id']==sid and bool(r['engines_ok']) for r in indexes),
+                    'window_links': len(window_urls[sid]), 'originals_fetched': 0,
+                    'verified': 0, 'published': 0} for sid in sorted(section_ids)}
+    if diagnostics is not None:
+        diagnostics['sections'] = funnel
     cfg=settings.values.get('discovery',{})
     gap_limit=cfg.get('max_gap_queries',3)
     mandatory={s['id'] for s in settings.sections if s['id'] not in covered and not s.get('search',{}).get('queries')}
     fixed_count=sum(len(s.get('search',{}).get('queries',[])) for s in settings.sections)
-    limit=min(40,fixed_count+sum(s.get('search',{}).get('query_count',2) for s in settings.sections if s['id'] in mandatory)+gap_limit)
+    limit=min(budget.remaining_queries,fixed_count+sum(s.get('search',{}).get('query_count',2) for s in settings.sections if s['id'] in mandatory)+gap_limit)
     queries=[];planned=[]
     for section in settings.sections:
         fixed=section.get('search',{}).get('queries',[])
@@ -100,7 +153,8 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
             coverage.append({'section_id':section['id'],'read_sources':sum(r.get('engines_ok',0)>0 for r in rows),
                 'source_urls':[r.get('index_url','') for r in rows if r.get('engines_ok')],
                 'failed_sources':[r.get('index_url','') for r in rows if not r.get('engines_ok')],
-                'recent_links':sum(len(r['sources']) for r in rows),'titles':titles[:8]})
+                'recent_links':len(window_urls[section['id']]),
+                'unverified_leads':len({p['url'] for r in rows for p in r['sources']} - window_urls[section['id']]),'titles':titles[:8]})
         query_limit=min(max(0,limit-len(queries)),sum(s['search']['query_count'] for s in planned))
         payload={'window':window,'sections':planned,'query_limit':query_limit,
             'strategy':'source_first','source_coverage':coverage,'mandatory_section_ids':sorted(mandatory),
@@ -134,6 +188,7 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
             if errors:raise SearchPlanError(errors)
     errors=plan_problems(queries,sections_by_id,mandatory,covered,limit,gap_limit)
     if errors:raise SearchPlanError(errors)
+    budget.take_queries(len(queries))
     search_results=search(settings,queries,work,window) if queries else []
     results=indexes+search_results
     # Round-robin across publishers before applying a per-section model-input cap.
@@ -145,12 +200,11 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
             sid=result['section_id']
             if position>=len(result['sources']) or len(allowed[sid])>=preview_cap:continue
             item=result['sources'][position]
-            if any(word.casefold() in (item.get('title','')+' '+item.get('snippet','')).casefold()
-                   for word in sections_by_id[sid].get('filter',{}).get('exclude_keywords',[])):continue
+            if excluded_preview(sections_by_id[sid],item):continue
             try:allowed[sid].add(source_url(item['url']))
             except ValueError:continue
     previews={}
-    url_ids={}
+    url_ids=budget.url_ids
     all_urls=set()
     coverage=[]
     for result in results:
@@ -165,7 +219,7 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
             preview=previews.setdefault(sid,{'id':sid,'url':url,'section_ids':[]})
             if result['section_id'] not in preview['section_ids']:preview['section_ids'].append(result['section_id'])
             # A feed entry carries publisher provenance even if search found the URL first.
-            if not preview.get('title') or item.get('discovery_index'):
+            if not preview.get('title') or (item.get('discovery_index') and not preview.get('publisher_published_at')):
                 preview.update({k:v for k,v in item.items() if k not in {'snippet','url'}})
                 preview['content']=item.get('snippet','')[:350]
     if not previews:raise ValueError('All search results empty; cannot claim a no-news edition')
@@ -174,7 +228,7 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
         'material_kind':'search previews; facts and dates MUST be verified against fetched original pages',
         'candidate_limit':candidate_limit,'max_sources_per_candidate':3})
     candidates=validate_selection(selection,settings,list(previews.values()),candidate_limit)
-    cap=settings.values.get('search',{}).get('max_fetches_per_edition',24)
+    cap=budget.fetch_limit-len(budget.fetch_urls)
     # Give every candidate a first original before spending the budget on corroboration.
     selected=list(dict.fromkeys(c['source_ids'][i] for i in range(3) for c in candidates
                                 if i<len(c['source_ids'])))[:cap]
@@ -185,18 +239,19 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
         publishers={}
         for sid,preview in previews.items():publishers.setdefault(urlsplit(preview['url']).hostname,sid)
         selected=list(publishers.values())[:min(3,cap)]
-    sources=[{**s,'id':url_ids[source_url(s['url'])]} for s in fetch(settings,[previews[sid] for sid in selected],work,cache)]
+    sources=[{**s,'id':url_ids[source_url(s['url'])]} for s in fetch(settings,budget.take_fetches(previews[sid] for sid in selected),work,cache)]
     available={s['id'] for s in sources}
     recovery=[]
     remaining_gap=max(0,gap_limit-sum(q['section_id'] in covered for q in queries))
     for candidate in candidates:
         if any(sid in available for sid in candidate['source_ids']):continue
-        if not remaining_gap or len(selected)>=cap:break
+        if not remaining_gap or not budget.remaining_queries or len(selected)>=cap:break
         remaining_gap-=1
         query=' '.join(candidate['entities']+[str(candidate.get('focus') or candidate['event_key'])])[:220]
         attempt={'section_id':candidate['section_id'],'event_key':candidate['event_key'],'fetched_sources':0}
         recovery.append(attempt)
         try:
+            budget.take_queries(1)
             alternatives=search(settings,[{'section_id':candidate['section_id'],'query':query}],work,window)
             extra=[]
             for result in alternatives:
@@ -208,12 +263,14 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
                     if sid is None:
                         sid='s'+str(len(url_ids)+1);url_ids[url]=sid;all_urls.add(url)
                         previews[sid]={**item,'id':sid,'url':url,'section_ids':[candidate['section_id']]}
+                    if candidate['section_id'] not in previews[sid]['section_ids']:
+                        previews[sid]['section_ids'].append(candidate['section_id'])
                     extra.append(sid)
                     if len(extra)>=min(4,cap-len(selected)):break
                 if len(extra)>=min(4,cap-len(selected)):break
             selected.extend(extra)
             recovered=[{**s,'id':url_ids[source_url(s['url'])]}
-                       for s in fetch(settings,[previews[sid] for sid in extra],work,cache)]
+                       for s in fetch(settings,budget.take_fetches(previews[sid] for sid in extra),work,cache)]
             sources.extend(recovered);available.update(s['id'] for s in recovered)
             candidate['source_ids'] += [s['id'] for s in recovered]
             attempt['fetched_sources']=len(recovered)
@@ -234,7 +291,14 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
     for result in results:
         for status in result.get('engine_status',[]):
             key=status['engine']+':'+status['status'];engine_status[key]=engine_status.get(key,0)+1
-    metrics={'collection_strategy':'source_first','plugin_queries':len(queries)+len(recovery),
+    for source_id in selected:
+        preview = previews[source_id]
+        url = source_url(preview['url'])
+        if source_id in available or cache.get(url):
+            for section_id in preview['section_ids']:
+                budget.originals_by_section.setdefault(section_id, set()).add(url)
+    metrics={'collection_strategy':'source_first','plugin_queries':budget.queries,
+             'search_query_limit':budget.query_limit,'fetch_attempts':len(budget.fetch_urls),
              'search_engines_ok':sum(r['engines_ok'] for r in search_results),
              'source_covered_sections':sorted(covered),'search_gap_queries':sum(q['section_id'] in covered for q in queries),
              'preview_urls_omitted':len(all_urls)-len(previews),
@@ -247,7 +311,8 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
                                   'available_sources':len(c['source_ids'])} for c in candidates],
              'fetch_results':[{'url':previews[sid]['url'],'ok':sid in available,
                                'section_ids':previews[sid]['section_ids']} for sid in selected],
-             'sections':{sid:{'result_urls':sum(sid in p['section_ids'] for p in previews.values()),
+             'sections':{sid:{**funnel[sid], 'originals_fetched':len(budget.originals_by_section.get(sid, ())),
+                              'result_urls':sum(sid in p['section_ids'] for p in previews.values()),
                               'selected_candidates':sum(c['section_id']==sid for c in candidates),
                               'candidates_with_originals':sum(c['section_id']==sid for c in kept)}
                          for sid in sorted(section_ids)}}
@@ -256,7 +321,26 @@ def research(settings, client, window: dict, work: Path, cache: dict, diagnostic
     return sources,kept,coverage,results,metrics
 
 
-def supplement(settings, section: dict, query: str, work: Path, cache: dict, window: dict | None = None) -> list[dict]:
+def supplement(settings, section: dict, query: str, work: Path, cache: dict, window: dict | None = None,
+               *, budget: SearchBudget | None = None, diagnostics: dict | None = None,
+               identify: bool = True) -> list[dict]:
+    if budget is not None:
+        if not budget.remaining_queries or len(budget.fetch_urls) >= budget.fetch_limit:
+            return []
+        budget.take_queries(1)
+        if diagnostics is not None:
+            diagnostics['plugin_queries'] = budget.queries
     results=search(settings,[{'section_id':section['id'],'query':query[:220]}],work,window)
     candidates=[s for r in results for s in r['sources']][:4]
-    return fetch(settings,candidates,work,cache)
+    if budget is None:
+        return fetch(settings,candidates,work,cache)
+    selected = budget.take_fetches(candidates)
+    if diagnostics is not None:
+        diagnostics['fetch_attempts'] = len(budget.fetch_urls)
+    sources = fetch(settings,selected,work,cache)
+    originals = budget.originals_by_section.setdefault(section['id'], set())
+    originals.update(source_url(source['url']) for source in sources)
+    originals.update(source_url(item['url']) for item in selected if cache.get(source_url(item['url'])))
+    if diagnostics is not None:
+        diagnostics.setdefault('sections', {}).setdefault(section['id'], {})['originals_fetched'] = len(originals)
+    return [budget.identify(source) for source in sources] if identify else sources

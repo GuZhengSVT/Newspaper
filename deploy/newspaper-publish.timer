@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for an unconfirmed Newspaper Pages release
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=1min
+Unit=newspaper-publish.service
+
+[Install]
+WantedBy=timers.target

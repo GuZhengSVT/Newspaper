@@ -49,7 +49,7 @@
       <div class="rule" style="margin:0 0 26px;padding:0 0 24px;border-bottom:1px solid #cdc7ba;">
         {% if section.bilingual %}<h4 lang="en" class="mail-headline ink" style="margin:0 0 12px;font-family:{{ latin }}, serif;font-size:25px;line-height:1.35;color:#24231f;">{{ article.bilingual.title_en }}</h4>{% endif %}
         <h4 class="mail-headline ink" style="margin:0 0 12px;font-size:24px;line-height:1.55;font-weight:700;color:#24231f;">{{ article.title }}</h4>
-        <p class="muted" style="margin:0 0 20px;{{ small }}">{{ article.time }}{% if article.importance %} · {{ article.importance }} · 可靠性 {{ article.reliability }}{% endif %}{% if article.follow_up %} · 进展{% endif %}</p>
+        <p class="muted" style="margin:0 0 20px;{{ small }}">{{ article.time }}{% if article.importance %} · {{ article.importance }} · 可靠性 {{ article.reliability }}{% endif %}{% if article.follow_up %} · 进展{% endif %}{% for label in article.evidence_labels %} · {{ label }}{% endfor %}</p>
         {% if section.bilingual %}
           {% for pair in article.bilingual_paragraphs %}
           <div style="margin:0 0 24px;">

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from newspaper.config import Settings
+from newspaper.events import editorial_history, link_report_events
+from newspaper.reading import report_view
 from newspaper.evidence import selected_sources, used_evidence, validate_selection
 from newspaper.pipeline import generate, apply_repair, keep_approved, filter_invalid_articles
 from newspaper.publish import build, markdown
@@ -329,6 +331,80 @@ class EditionTests(NewspaperCase):
     def test_global_structure_errors_are_not_hidden_by_article_filtering(self):
         doc=self.issue('culture');doc['sections'][0]['id']='unconfigured'
         with self.assertRaises(ValueError):filter_invalid_articles(doc,self.settings,[self.source],[],self.window,set())
+
+    def test_cross_cycle_repeat_links_prior_issue_and_keeps_distinct_events_from_shared_page(self):
+        prior = self.save(self.issue('daily'), task_id='daily')
+        current = self.issue('weekly')
+        article = current['sections'][0]['articles'][0]
+        independent = copy.deepcopy(article)
+        independent['event_key'] = 'fixture|synthetic|other'
+        independent['facts'][0]['text'] = '同一公告中的另一则消息'
+        current['sections'][0]['articles'].append(independent)
+        candidates = [{**a, 'source_ids': ['s1']} for a in (article, independent)]
+        history = self.store.related_history(candidates, sources=[self.source], task_id='weekly', window=self.window)
+        self.assertEqual(len(history), 1)
+        self.assertTrue(history[0]['evidence'])
+        self.assertNotIn('evidence', editorial_history(history)[0])
+        self.assertNotIn('claims', editorial_history(history)[0])
+        link_report_events(current, history, [self.source], task_id='weekly', candidates=candidates)
+        self.assertFalse(article['follow_up'])
+        self.assertEqual(article['event_links'][0]['kind'], 'related')
+        self.assertNotIn('event_links', independent)
+        validate_report(current, self.settings, [self.source], history, self.window)
+        key = edition_key(prior)
+        with_prior = report_view(current, edition_key(current), documents={key: prior})
+        self.assertEqual(with_prior['sections'][0]['articles'][0]['prior_articles'][0]['url'],
+                         '/daily/' + key + '/#daily-s1-a1')
+        self.assertEqual(report_view(current, edition_key(current), documents={})
+                         ['sections'][0]['articles'][0]['prior_articles'], [])
+        link_report_events(current, history, [self.source], task_id='daily', candidates=candidates)
+        with self.assertRaisesRegex(ValueError, 'substantive follow-up'):
+            validate_report(current, self.settings, [self.source], history, self.window)
+
+    def test_same_cycle_progress_needs_a_new_claim_and_current_evidence(self):
+        self.save(self.issue('previous'), task_id='daily')
+        current = self.issue('daily')
+        article = current['sections'][0]['articles'][0]
+        candidate = {'event_key': article['event_key'], 'entities': article['entities'], 'source_ids': ['s1']}
+        history = self.store.related_history([candidate], sources=[self.source], task_id='daily', window=self.window)
+        article.update(follow_up=True, new_facts='改写旧事实')
+        link_report_events(current, history, [self.source], task_id='daily', candidates=[candidate])
+        self.assertFalse(article['follow_up'])
+        fresh_quote = 'A new notice confirms that the launch date changed.'
+        source = {**self.source, 'content': self.source['content'] + ' ' + fresh_quote}
+        article.update(follow_up=True, new_facts='发布日期已经调整')
+        article['facts'][0].update(text='公告确认调整发布日期', evidence=[{'source_id': 's1', 'quote': fresh_quote}])
+        link_report_events(current, history, [source], task_id='daily', candidates=[candidate])
+        self.assertTrue(article['follow_up'])
+        self.assertEqual(article['event_links'][0]['kind'], 'progress')
+        validate_report(current, self.settings, [source], history, self.window)
+
+    def test_retained_quotes_stay_with_their_event_and_cannot_supply_the_only_core_evidence(self):
+        prior = self.save(self.issue('daily'), task_id='daily')
+        current = self.issue('weekly')
+        article = current['sections'][0]['articles'][0]
+        current_source = {**self.source, 'id': 's-new', 'url': 'https://second.test/article'}
+        candidate = {'event_key': article['event_key'], 'entities': article['entities'], 'source_ids': ['s-new']}
+        history = self.store.related_history([candidate], sources=[current_source], task_id='weekly', window=self.window)
+        sources = self.store.reuse_event_evidence([candidate], [current_source], history, window=self.window)
+        self.assertEqual(len(sources), 2)
+        old_source = sources[1]
+        self.assertEqual(old_source['prior_edition'], edition_key(prior))
+        self.assertEqual(old_source['content'], article['facts'][0]['evidence'][0]['quote'])
+        bounds = ('id', 'url', 'title', 'published_at')
+        current['sources'] = [{key: source[key] for key in bounds} for source in sources]
+        evidence = article['facts'][0]['evidence']
+        evidence[0]['source_id'] = old_source['id']
+        with self.assertRaisesRegex(ValueError, 'current support'):
+            validate_report(current, self.settings, sources, history, self.window)
+        evidence.append({**evidence[0], 'source_id': 's-new'})
+        validate_report(current, self.settings, sources, history, self.window)
+        article['event_key'] = 'fixture|unrelated|event'
+        with self.assertRaisesRegex(ValueError, 'different event'):
+            validate_report(current, self.settings, sources, history, self.window)
+        self.store.db.execute("UPDATE editions SET expires_at=0 WHERE day=?", (edition_key(prior),))
+        self.assertEqual(self.store.reuse_event_evidence([candidate], [current_source], history, window=self.window),
+                         [current_source])
 
 
 if __name__=='__main__':unittest.main()

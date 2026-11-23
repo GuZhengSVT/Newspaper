@@ -1,7 +1,8 @@
-"""Translate sentence pairs once, before publication; never translate in readers."""
+"""Translate and validate sentence pairs for synchronous and deferred publication."""
 from __future__ import annotations
 
 import re
+import time
 
 
 def sentence_units(article: dict) -> list[str]:
@@ -93,13 +94,16 @@ def validate_dates(chinese: str, english: str) -> None:
 
 
 
-def translate(doc: dict, client, *, diagnostics: list | None = None, on_article_translated=None) -> int:
+def translate(doc: dict, client, *, diagnostics: list | None = None, on_article_translated=None,
+              should_translate=None, on_article_failed=None) -> int:
     """Translate each unfinished article once; validate structure without a model reviewer."""
     count = 0
     for section in doc.get('sections', []):
         for article in section['articles']:
             if article.get('bilingual'):
                 validate_bilingual(article, required=True)
+                continue
+            if should_translate is not None and not should_translate(article):
                 continue
             units = sentence_units(article)
             source = {'title_zh': article['title'], 'sentences': [
@@ -122,8 +126,143 @@ def translate(doc: dict, client, *, diagnostics: list | None = None, on_article_
                         'attempt': 1, 'stage': 'translate', 'error_type': type(exc).__name__,
                         'reason': str(exc)[:600] if isinstance(exc, (ValueError, KeyError, TypeError))
                                   else type(exc).__name__})
+                if on_article_failed is not None:
+                    on_article_failed(article, exc)
+                    continue
                 raise
             article['bilingual'] = value
             count += 1
             if on_article_translated:on_article_translated(article)
     return count
+
+
+def translation_mode(settings) -> str:
+    config = settings.values.get('translation', {})
+    return config.get('publish', 'together') if config.get('enabled', False) else 'disabled'
+
+
+def queue_translation(store, day: str) -> None:
+    store.db.execute('''CREATE TABLE IF NOT EXISTS pending_translations (
+        day TEXT PRIMARY KEY REFERENCES editions(day) ON DELETE CASCADE,
+        needs_build INTEGER NOT NULL DEFAULT 0)''')
+    store.db.execute('''CREATE TABLE IF NOT EXISTS translation_retries (
+        day TEXT NOT NULL REFERENCES pending_translations(day) ON DELETE CASCADE,
+        event_key TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt REAL NOT NULL,
+        error_type TEXT NOT NULL, PRIMARY KEY(day,event_key))''')
+    store.db.execute('INSERT OR IGNORE INTO pending_translations(day) VALUES(?)', (day,))
+
+
+def resume_translations(settings, store, *, day: str | None = None, manual: bool = False) -> dict:
+    """Continue retained editions under the pipeline lock, preserving their delivery records."""
+    from .model import Model, ModelBudgetReached, ModelDeferred, provider_failure
+    from .publish import build, markdown
+    from .storage import atomic_json, utcnow
+
+    result = {'translated_articles': 0, 'failed': 0, 'deferred': 0, 'budget_blocked': [], 'rebuilt': False}
+    mode = translation_mode(settings)
+    if mode == 'disabled' and not manual:
+        return result
+    db = store.db
+    now = utcnow().timestamp()
+    if manual:
+        entries = db.execute("SELECT day FROM editions WHERE status='published' AND legacy=0 AND expires_at>? ORDER BY day",
+                             (now,))
+        for key, in entries.fetchall():
+            if day is not None and key != day and not key.startswith(day + '/'):
+                continue
+            queue_translation(store, key)
+        db.commit()
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='pending_translations'").fetchone():
+        return result
+    entries = db.execute('''SELECT p.day,p.needs_build FROM pending_translations p JOIN editions e USING(day)
+                            WHERE e.status='published' AND e.expires_at>? ORDER BY p.day''', (now,)).fetchall()
+    changed = []
+    complete = []
+    provider_deferred = False
+    retry_delays = (300, 1800, 7200)
+    attempts_this_run = 0
+    deadline = time.monotonic() + 20
+    for key, dirty in entries:
+        if manual and day is not None and key != day and not key.startswith(day + '/'):
+            continue
+        doc = store.document(key)
+        articles = [article for section in doc.get('sections', []) for article in section['articles']]
+        directory = settings.data / 'editions' / key
+        retries = {row['event_key']: row['attempts'] for row in db.execute('''SELECT * FROM translation_retries
+                   WHERE day=? AND (attempts>? OR next_attempt>?)''', (key, len(retry_delays), now))}
+        budget_blocked = False
+
+        def should_translate(article):
+            nonlocal provider_deferred, attempts_this_run, budget_blocked
+            if not manual and (attempts_this_run >= 2 or time.monotonic() >= deadline):
+                result['deferred'] += 1
+                return False
+            if provider_deferred or budget_blocked or (article['event_key'] in retries and not manual):
+                result['deferred'] += 1
+                return False
+            try:
+                client.check_budget()
+                client.check_backoff()
+            except ModelBudgetReached:
+                budget_blocked = True
+                result['budget_blocked'].append(key)
+                result['deferred'] += 1
+                return False
+            except ModelDeferred:
+                provider_deferred = True
+                result['deferred'] += 1
+                return False
+            attempts_this_run += 1
+            return True
+
+        def store_article(article):
+            nonlocal dirty
+            db.execute('UPDATE pending_translations SET needs_build=1 WHERE day=?', (key,))
+            db.commit()
+            dirty = True
+            atomic_json(directory / 'report.json', doc)
+            db.execute('DELETE FROM translation_retries WHERE day=? AND event_key=?', (key, article['event_key']))
+            db.commit()
+
+        def store_failure(article, error):
+            nonlocal provider_deferred, budget_blocked
+            if isinstance(error, ModelBudgetReached):
+                budget_blocked = True
+                result['budget_blocked'].append(key)
+                result['deferred'] += 1
+                return
+            if isinstance(error, ModelDeferred):
+                provider_deferred = True
+                result['deferred'] += 1
+                return
+            if provider_failure(error):
+                provider_deferred = True
+                result['failed'] += 1
+                return
+            event_key = article['event_key']
+            current = db.execute('SELECT attempts FROM translation_retries WHERE day=? AND event_key=?',
+                                 (key, event_key)).fetchone()
+            attempts = (current[0] if current else 0) + 1
+            wait = retry_delays[min(attempts - 1, len(retry_delays) - 1)]
+            db.execute('INSERT OR REPLACE INTO translation_retries VALUES(?,?,?,?,?)',
+                       (key, event_key, attempts, utcnow().timestamp() + wait, type(error).__name__))
+            db.commit()
+            result['failed'] += 1
+
+        if any(not a.get('bilingual') for a in articles):
+            client = Model(settings, store=store, edition_key=key, time_limited=not manual)
+            result['translated_articles'] += translate(doc, client, should_translate=should_translate,
+                on_article_translated=store_article, on_article_failed=store_failure)
+        if dirty:
+            (directory / 'report.md').write_text(markdown(doc, settings))
+            changed.append((key,))
+        if all(a.get('bilingual') for a in articles):
+            complete.append((key,))
+    if changed:
+        result.update(build(settings, store), rebuilt=True)
+        db.executemany('UPDATE pending_translations SET needs_build=0 WHERE day=?', changed)
+    if complete:
+        db.executemany('DELETE FROM pending_translations WHERE day=?', complete)
+    if changed or complete:
+        db.commit()
+    return result

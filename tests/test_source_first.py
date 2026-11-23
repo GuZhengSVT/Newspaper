@@ -16,7 +16,8 @@ class SourceFirstTests(NewspaperCase):
         return {'section_id':'fixture','index_url':'https://example.test/feed','index_status':'links',
                 'engines_ok':1,'sources':sources if sources is not None else [
                     {'url':self.source['url'],'title':'Synthetic release','snippet':'Evidence lead',
-                     'discovery_index':'https://example.test/feed'}],**kwargs}
+                     'discovery_index':'https://example.test/feed',
+                     'publisher_published_at':self.source['published_at']}],**kwargs}
 
     def candidate(self):
         return {'event_key':'fixture|release|one','entities':['Fixture'],'section_id':'fixture',
@@ -192,15 +193,17 @@ class SourceFirstTests(NewspaperCase):
                 research(self.settings,client,self.window,self.root,{})
         search.assert_called_once()
 
-    def test_a_read_source_without_recent_links_still_needs_a_search(self):
+    def test_a_read_source_with_only_undated_links_still_needs_a_search(self):
         client=Mock();client.request.side_effect=[{'queries':[{'section_id':'fixture','query':'recent release'}]},
                                                   {'candidates':[self.candidate()]}]
-        empty=self.index([],index_status='no_recent_links')
-        with patch('newspaper.bounded.discover',return_value=([empty],{})), \
+        undated=self.index([{'url':self.source['url'], 'title':'Undated original', 'snippet':'A usable lead'}])
+        with patch('newspaper.bounded.discover',return_value=([undated],{})), \
              patch('newspaper.bounded.search',return_value=[self.index()]) as search, \
              patch('newspaper.bounded.fetch',return_value=[self.source]):
             *_,metrics=research(self.settings,client,self.window,self.root,{})
         self.assertEqual(client.request.call_args_list[0].args[1]['mandatory_section_ids'],['fixture'])
+        self.assertEqual(metrics['sections']['fixture']['window_links'],0)
+        self.assertEqual(metrics['sections']['fixture']['indexes_read'],1)
         search.assert_called_once()
 
     def test_failed_sources_cannot_be_counted_as_covered_to_skip_search(self):
@@ -223,7 +226,8 @@ class SourceFirstTests(NewspaperCase):
 
     def test_bounded_previews_keep_publishers_fair_and_shorten_snippets(self):
         self.settings.values['discovery']={'max_previews_per_section':2,'max_gap_queries':0}
-        first=[{'url':self.source['url'] if i==0 else f'https://example.test/a{i}','title':'First publisher','snippet':'x'*1000} for i in range(3)]
+        first=[{'url':self.source['url'] if i==0 else f'https://example.test/a{i}','title':'First publisher','snippet':'x'*1000,
+                'publisher_published_at': self.source['published_at']} for i in range(3)]
         second=[{'url':f'https://second.test/b{i}','title':'Second publisher','snippet':'y'*1000} for i in range(3)]
         client=Mock();client.request.return_value={'candidates':[self.candidate()]}
         with patch('newspaper.bounded.discover',return_value=([self.index(first),self.index(second)],{})), \

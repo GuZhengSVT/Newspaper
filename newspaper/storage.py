@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -76,7 +77,8 @@ class Store:
           PRAGMA journal_mode=DELETE;
           CREATE TABLE IF NOT EXISTS editions (
             day TEXT PRIMARY KEY, expires_at REAL NOT NULL, status TEXT NOT NULL,
-            title TEXT NOT NULL, summary TEXT NOT NULL, legacy INTEGER NOT NULL DEFAULT 0
+            title TEXT NOT NULL, summary TEXT NOT NULL, legacy INTEGER NOT NULL DEFAULT 0,
+            notify_suppressed INTEGER NOT NULL DEFAULT 0
           );
           CREATE TABLE IF NOT EXISTS events (
             id TEXT NOT NULL, day TEXT NOT NULL REFERENCES editions(day) ON DELETE CASCADE,
@@ -96,6 +98,11 @@ class Store:
             entity TEXT NOT NULL, event_id TEXT NOT NULL,
             day TEXT NOT NULL REFERENCES editions(day) ON DELETE CASCADE,
             PRIMARY KEY(entity,event_id,day)
+          );
+          CREATE TABLE IF NOT EXISTS event_sources (
+            url TEXT NOT NULL, event_id TEXT NOT NULL, day TEXT NOT NULL,
+            PRIMARY KEY(url,event_id,day),
+            FOREIGN KEY (event_id,day) REFERENCES events(id,day) ON DELETE CASCADE
           );
           CREATE INDEX IF NOT EXISTS entity_lookup ON event_entities(entity);
           CREATE TABLE IF NOT EXISTS publication_tasks (
@@ -133,11 +140,15 @@ class Store:
             PRIMARY KEY(incident_id,account_id,channel,recipient)
           );
         """)
+        if 'notify_suppressed' not in {r[1] for r in self.db.execute('PRAGMA table_info(editions)')}:
+            self.db.execute('ALTER TABLE editions ADD COLUMN notify_suppressed INTEGER NOT NULL DEFAULT 0')
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
         if "facts" not in columns:
             self.db.execute("ALTER TABLE events ADD COLUMN facts TEXT NOT NULL DEFAULT '[]'")
         if "entities" not in columns:
             self.db.execute("ALTER TABLE events ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
+        if "evidence_metadata" not in columns:
+            self.db.execute("ALTER TABLE events ADD COLUMN evidence_metadata TEXT NOT NULL DEFAULT '{}'")
         if "metrics" not in {r[1] for r in self.db.execute("PRAGMA table_info(runs)")}:
             self.db.execute("ALTER TABLE runs ADD COLUMN metrics TEXT NOT NULL DEFAULT '{}'")
         if 'progress' not in {r[1] for r in self.db.execute('PRAGMA table_info(notification_outbox)')}:
@@ -157,20 +168,28 @@ class Store:
             (now if now is not None else utcnow().timestamp(),),
         )]
 
-    def add(self, doc: dict, legacy: bool = False, task_id: str | None = None) -> None:
+    def add(self, doc: dict, legacy: bool = False, task_id: str | None = None, *, suppress_notification=False) -> None:
         key = edition_key(doc)
         self.db.execute(
-            "INSERT INTO editions(day,expires_at,status,title,summary,legacy) VALUES(?,?,'ready',?,?,?)",
-            (key, expiry(doc["date"],self.settings.timezone), doc["title"], doc["summary"], int(legacy)),
+            "INSERT INTO editions(day,expires_at,status,title,summary,legacy,notify_suppressed) VALUES(?,?,'ready',?,?,?,?)",
+            (key, expiry(doc["date"],self.settings.timezone), doc["title"], doc["summary"], int(legacy), int(suppress_notification)),
         )
         if task_id:self.db.execute("INSERT INTO publication_tasks(day,task_id) VALUES(?,?)",(key,task_id))
+        from .events import core_claims, event_evidence
+        urls = {source['id']: source['url'] for source in doc.get('sources', [])}
         for section in doc.get("sections", []):
             for article in section["articles"]:
                 entities = article.get("entities", [])
-                self.db.execute("INSERT INTO events(id,day,description,facts,entities) VALUES(?,?,?,?,?)",
+                evidence = event_evidence(article, urls)
+                metadata = {'window_end': doc.get('window_end'), 'claims': sorted(core_claims(article)),
+                            'evidence': sorted(evidence)}
+                self.db.execute("INSERT INTO events(id,day,description,facts,entities,evidence_metadata) VALUES(?,?,?,?,?,?)",
                                 (article["event_key"], key, article["title"],
                                  json.dumps(([article["new_facts"]] if article["new_facts"] else []) + [f["text"][:500] for f in article["facts"] if f.get("kind", "fact") == "fact"][:4], ensure_ascii=False),
-                                 json.dumps(entities, ensure_ascii=False)))
+                                 json.dumps(entities, ensure_ascii=False), json.dumps(metadata, ensure_ascii=False)))
+                for url in {url for url, _ in evidence}:
+                    self.db.execute("INSERT INTO event_sources(url,event_id,day) VALUES(?,?,?)",
+                                    (url, article["event_key"], key))
                 for entity in entities:
                     normalized = normalize_entity(entity)
                     if normalized:
@@ -208,33 +227,116 @@ class Store:
             (utcnow().timestamp(),task_id,task_id),
         )]
 
-    def related_history(self, candidates: list[dict], limit: int = 40, task_id: str | None = None) -> list[dict]:
+    def related_history(self, candidates: list[dict], limit: int = 40, task_id: str | None = None,
+                        *, sources: list[dict] | None = None, window: dict | None = None) -> list[dict]:
+        from .events import core_claims, event_evidence
+        from .research import source_url
         entities = {normalize_entity(e) for c in candidates for e in c.get("entities", [])}
         entities.discard("")
-        keys = {c["event_key"] for c in candidates if c.get("event_key")}
-        if not entities and not keys:
+        keys = {c["event_key"].strip().casefold() for c in candidates if c.get("event_key")}
+        source_ids = {sid for candidate in candidates for sid in candidate.get('source_ids', [])}
+        urls = {source_url(s['url']) for s in sources or [] if s['id'] in source_ids}
+        if not entities and not keys and not urls:
             return []
+        scope = task_id if sources is None else None
         marks = ",".join("?" for _ in entities) or "NULL"
         keymarks = ",".join("?" for _ in keys) or "NULL"
-        rows = self.db.execute(f"""SELECT DISTINCT e.* FROM events e
-            JOIN editions d ON d.day=e.day LEFT JOIN event_entities x ON x.event_id=e.id AND x.day=e.day
+        urlmarks = ",".join("?" for _ in urls) or "NULL"
+        now = utcnow().timestamp()
+        latest_day = (date.fromisoformat(window['date']) + timedelta(days=1)).isoformat() if window else None
+        cutoff = datetime.fromisoformat(window['window_end']) if window else None
+        rows = self.db.execute(f"""SELECT e.*,t.task_id FROM events e
+            JOIN editions d ON d.day=e.day
             LEFT JOIN publication_tasks t ON t.day=d.day
-            WHERE d.status='published' AND d.expires_at>? AND (? IS NULL OR t.task_id=?) AND (x.entity IN ({marks}) OR e.id IN ({keymarks}))
-            ORDER BY e.day DESC LIMIT ?""", (utcnow().timestamp(), task_id, task_id, *entities, *keys, limit)).fetchall()
-        result = [{**dict(r), "facts": json.loads(r["facts"]), "entities": json.loads(r["entities"])} for r in rows]
-        # Imported v1 archives have no entity index. Match their short event titles locally.
-        known = {(r["id"], r["day"]) for r in result}
-        if len(result) < limit:
-            legacy = self.db.execute("""SELECT e.* FROM events e JOIN editions d ON d.day=e.day LEFT JOIN publication_tasks t ON t.day=d.day
-                WHERE d.status='published' AND d.expires_at>? AND e.entities='[]' AND (? IS NULL OR t.task_id=?) ORDER BY e.day DESC""",
-                (utcnow().timestamp(),task_id,task_id)).fetchall()
+            WHERE d.status='published' AND d.expires_at>? AND (? IS NULL OR t.task_id=?)
+                AND (? IS NULL OR e.day<?)
+                AND (lower(trim(e.id)) IN ({keymarks})
+                    OR EXISTS(SELECT 1 FROM event_entities x WHERE x.day=e.day AND x.event_id=e.id AND x.entity IN ({marks}))
+                    OR EXISTS(SELECT 1 FROM event_sources s WHERE s.day=e.day AND s.event_id=e.id AND s.url IN ({urlmarks})))
+            ORDER BY (lower(trim(e.id)) IN ({keymarks})) DESC,(t.task_id IS ?) DESC,e.day DESC,e.id LIMIT ?""",
+            (now, scope, scope, latest_day, latest_day, *keys, *entities, *urls, *keys, task_id, limit)).fetchall()
+        known = {(r["id"], r["day"]) for r in rows}
+        if entities and len(rows) < limit:
+            legacy = self.db.execute("""SELECT e.*,t.task_id FROM events e JOIN editions d ON d.day=e.day
+                LEFT JOIN publication_tasks t ON t.day=d.day WHERE d.status='published' AND d.expires_at>?
+                AND e.entities='[]' AND (? IS NULL OR t.task_id=?)
+                AND (? IS NULL OR e.day<?) ORDER BY e.day DESC""", (now,scope,scope,latest_day,latest_day))
             for row in legacy:
-                if len(result) >= limit:
-                    break
-                description = normalize_entity(row["description"])
-                if (row["id"], row["day"]) not in known and any(len(e)>=3 and e in description for e in entities):
-                    result.append({**dict(row), "facts": json.loads(row["facts"]), "entities": []})
+                if (row["id"], row["day"]) not in known and any(len(e)>=3 and e in normalize_entity(row["description"]) for e in entities):
+                    rows.append(row)
+                    if len(rows) >= limit:
+                        break
+        documents = {}
+        result = []
+        for row in rows:
+            entry = dict(row)
+            metadata = json.loads(entry.pop('evidence_metadata'))
+            if not metadata and sources is not None:
+                day = row['day']
+                if day not in documents:
+                    try:
+                        documents[day] = self.document(day)
+                    except (OSError, ValueError):
+                        documents[day] = {}
+                doc = documents[day]
+                old = next((a for sec in doc.get('sections', []) for a in sec['articles'] if a['event_key']==row['id']), None)
+                if old:
+                    old_urls = {s['id']: s['url'] for s in doc.get('sources', [])}
+                    metadata = {'claims': sorted(core_claims(old)), 'evidence': sorted(event_evidence(old, old_urls)),
+                                'window_end': doc.get('window_end')}
+            if cutoff is not None and metadata.get('window_end') and datetime.fromisoformat(metadata['window_end']) > cutoff:
+                continue
+            result.append({**entry, **metadata, 'facts': json.loads(row['facts']), 'entities': json.loads(row['entities']),
+                           'same_task': row['task_id'] == task_id})
         return result
+
+    def reuse_event_evidence(self, candidates: list[dict], sources: list[dict], history: list[dict],
+                             *, window: dict | None = None) -> list[dict]:
+        from .research import source_url
+        from .validation import normalize
+        current_urls = {source_url(s['url']) for s in sources}
+        if window is not None:
+            end = datetime.fromisoformat(window['window_end'])
+            history = [row for row in history if not row.get('window_end')
+                       or datetime.fromisoformat(row['window_end']) <= end]
+        archives = {}
+        reused = {}
+        now = utcnow().timestamp()
+        for candidate in candidates:
+            prior = next((row for row in history if normalize(row['id']) == normalize(candidate['event_key'])), None)
+            if not prior or not prior.get('evidence'):
+                continue
+            day = prior['day']
+            if day not in archives:
+                retained = self.db.execute("SELECT 1 FROM editions WHERE day=? AND status='published' AND expires_at>?",
+                                           (day, now)).fetchone()
+                try:
+                    archives[day] = self.document(day) if retained else {}
+                except (OSError, ValueError):
+                    archives[day] = {}
+            archive = archives[day]
+            article = next((a for section in archive.get('sections', []) for a in section['articles']
+                            if a['event_key'] == prior['id']), None)
+            if not article:
+                continue
+            records = {s['id']: s for s in archive.get('sources', [])}
+            quotes = {}
+            for fact in article['facts']:
+                for item in fact['evidence']:
+                    quotes.setdefault(item['source_id'], []).append(item['quote'])
+            for source_id, excerpts in list(quotes.items())[:3]:
+                record = records.get(source_id)
+                if record is None or source_url(record['url']) in current_urls:
+                    continue
+                digest = hashlib.sha256(json.dumps([day, source_id, prior["id"]]).encode()).hexdigest()
+                stable_id = "archive:" + digest
+                if stable_id not in reused:
+                    reused[stable_id] = {**record, 'id': stable_id,
+                                         'content': '\n[…]\n'.join(dict.fromkeys(excerpts)),
+                                         'prior_edition': day, 'prior_event_key': prior['id']}
+                if stable_id not in candidate['source_ids']:
+                    candidate['source_ids'].append(stable_id)
+        return [*sources, *reused.values()]
 
     def document(self, day: str) -> dict:
         parts = day.split("/")

@@ -7,6 +7,7 @@ import json
 from .storage import expiry, utcnow
 from .notify import readiness, send_text, UncertainDelivery
 from .messages import news_message
+from .publication import delivery_ready
 
 
 def prepare_batches(settings, store, jobs: list) -> list[str]:
@@ -46,10 +47,25 @@ def prepare_batches(settings, store, jobs: list) -> list[str]:
     return result
 
 
-def finish_batches(settings, store, batch_ids: list[str]) -> dict:
+def prepare_waiting(settings, store, batch_ids=None):
+    if batch_ids is None:
+        batch_ids = [r[0] for r in store.db.execute(
+            "SELECT id FROM notification_batches WHERE state='waiting' AND expires_at>?", (utcnow().timestamp(),))]
     for batch_id in batch_ids:
         row=store.db.execute('select * from notification_batches where id=?',(batch_id,)).fetchone()
-        if row['state']!='waiting' or not all(store.published(key) for key in json.loads(row['expected'])):continue
+        if row['state'] != 'waiting':
+            continue
+        expected = json.loads(row['expected'])
+        if not all(store.published(key) for key in expected):
+            continue
+        eligible = [key for key in expected if not store.db.execute(
+            'SELECT notify_suppressed FROM editions WHERE day=?', (key,)).fetchone()[0]]
+        if not eligible:
+            store.db.execute("UPDATE notification_batches SET state='cancelled' WHERE id=?", (batch_id,))
+            continue
+        if eligible != expected:
+            store.db.execute('UPDATE notification_batches SET expected=? WHERE id=?', (json.dumps(eligible), batch_id))
+            row = store.db.execute('SELECT * FROM notification_batches WHERE id=?', (batch_id,)).fetchone()
         if json.loads(row['channels'])==['accounts']:
             from .accounts import prepare_recipients
             prepare_recipients(settings,store,row)
@@ -58,6 +74,10 @@ def finish_batches(settings, store, batch_ids: list[str]) -> dict:
                 store.db.execute('insert or ignore into notification_outbox(batch_id,channel) values(?,?)',(batch_id,channel))
         store.db.execute("update notification_batches set state='ready' where id=?",(batch_id,))
     store.db.commit()
+
+
+def finish_batches(settings, store, batch_ids: list[str]) -> dict:
+    prepare_waiting(settings, store, batch_ids)
     return deliver_batches(settings,store)
 
 
@@ -96,7 +116,8 @@ def deliver_batches(settings, store) -> dict:
         if not settings.values.get('notifications',{}).get(channel,{}).get('enabled'):continue
         if not readiness(channel):result['unconfigured']+=1;continue
         batch=store.db.execute('select * from notification_batches where id=?',(row['batch_id'],)).fetchone()
-        if not all(store.published(key) for key in json.loads(batch['expected'])):continue
+        keys = json.loads(batch['expected'])
+        if not all(store.published(key) for key in keys) or not delivery_ready(settings, store, keys):continue
         subject,message=batch_message(settings,store,batch)
         store.db.execute("update notification_outbox set state='sending',attempts=attempts+1 where batch_id=? and channel=?",(row['batch_id'],channel))
         store.db.commit()

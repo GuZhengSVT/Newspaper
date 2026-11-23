@@ -1,0 +1,20 @@
+[Unit]
+Description=Publish the current Newspaper site and confirm the public version
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=newspaper
+Group=newspaper
+WorkingDirectory=/opt/Newspaper
+Environment=NEWSPAPER_CONFIG=/etc/newspaper/config.toml
+EnvironmentFile=/etc/newspaper/credentials.env
+ExecStart=/opt/Newspaper/.venv/bin/python -m newspaper.cli publish-site
+TimeoutStartSec=45s
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/newspaper

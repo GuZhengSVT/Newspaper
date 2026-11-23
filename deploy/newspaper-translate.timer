@@ -1,0 +1,10 @@
+[Unit]
+Description=Continue due Newspaper translations
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=3min
+Unit=newspaper-translate.service
+
+[Install]
+WantedBy=timers.target

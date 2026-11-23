@@ -19,15 +19,15 @@ from markdown_it import MarkdownIt
 from markupsafe import Markup
 
 from .config import ROOT, TZ, Settings
-from .storage import Store, utcnow
+from .storage import Store, atomic_json, utcnow
 from .reading import report_view
 
 MARKDOWN = MarkdownIt("commonmark", {"html": False})
 LABELS = {"official_statement": "官方发布", "single_source": "单一来源", "corroborated": "多源核实"}
 
 
-def markdown(doc: dict, settings=None) -> str:
-    view = report_view(doc, doc["date"],settings)
+def markdown(doc: dict, settings=None, *, documents: dict | None = None) -> str:
+    view = report_view(doc, doc["date"], settings, documents=documents)
     text = ["# " + doc["title"], ""]
     if view["window"]:
         text += ["报道时段：" + view["window"], ""]
@@ -42,6 +42,7 @@ def markdown(doc: dict, settings=None) -> str:
                 metadata += [article["importance"], "可靠性 " + article["reliability"]]
             if article["follow_up"]:
                 metadata.append("进展")
+            metadata.extend(article["evidence_labels"])
             text += [" · ".join(metadata), ""]
             for paragraph in article["paragraphs"]:
                 text += [paragraph, ""]
@@ -50,6 +51,9 @@ def markdown(doc: dict, settings=None) -> str:
                 caption=re.sub(r'([\\\[\]*_`])',r'\\\1',escape(image['caption']))
                 text += [f'![{caption}](<{image["url"]}>)', '',
                          caption+f' · [图片来源](<{image["source_url"]}>)', '']
+            for prior in article['prior_articles']:
+                title=re.sub(r'([\\\[\]*_`])',r'\\\1',escape(prior['title']))
+                text += [f'[{prior["label"]} · {title}](<{prior["url"]}>)', '']
             if article["references"]:
                 links = " · ".join(f'[{ref["label"]}](<{ref["url"]}>)' for ref in article["references"])
                 text += ["来源：" + links, ""]
@@ -82,7 +86,7 @@ def homepage_columns(settings: Settings, editions: list, documents: dict, today:
                 if not matches:continue
                 key,doc=max(matches,key=lambda pair:(pair[1].get('window_end',''),pair[1]['generated_at']))
                 section=next(s for s in doc['sections'] if s['id']==sid)
-                fragment={**doc,'sections':[section],'edition':'home-'+sid};part=report_view(fragment,key,settings)
+                fragment={**doc,'sections':[section],'edition':'home-'+sid};part=report_view(fragment,key,settings,documents=documents)
                 for item in part['sections']:
                     item.update(issue_date=doc['date'],issue_url='/daily/'+key+'/')
                     parts.append(item)
@@ -90,9 +94,28 @@ def homepage_columns(settings: Settings, editions: list, documents: dict, today:
             if links:view={'sections':parts,'count':sum(len(s['articles']) for s in parts)}
         else:
             key=today+('/'+group['id'] if group['id'] else '')
-            if key in documents:view=report_view(documents[key],key,settings)
+            if key in documents:view=report_view(documents[key],key,settings,documents=documents)
         columns.append({**group,'label':label,'anchor':anchor,'view':view,'issues':list(links.values()),'index_only':mode=='index'})
     return columns
+
+
+def render_inputs(settings, entries, today):
+    # Use metadata for large fonts and retained reports on the idle cleanup path.
+    paths = [p for folder in ('static', 'templates') for p in (ROOT / folder).rglob('*') if p.is_file()]
+    paths.extend((ROOT / 'newspaper').glob('*.py'))
+    for entry in entries:
+        directory = settings.data / 'editions' / entry['day']
+        paths.append(directory / 'report.json')
+        if entry['legacy']:
+            paths.append(directory / 'report.md')
+    stamps = []
+    for path in sorted(paths):
+        stat = path.stat()
+        stamps.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    options = {k: settings.values.get(k) for k in ('project', 'editions', 'sections', 'homepage')}
+    public_rows = [(e['day'], e['title'], e['summary'], e['legacy']) for e in entries]
+    data = json.dumps([today, settings.base_url, options, public_rows, stamps], sort_keys=True, default=str)
+    return hashlib.sha256(data.encode()).hexdigest()
 
 
 def build(settings: Settings, store: Store, now: float | None = None) -> dict:
@@ -124,7 +147,7 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
             directory = release / "daily" / day
             directory.mkdir(parents=True, exist_ok=True)
             source = settings.data / "editions" / day
-            md = (source / "report.md").read_text() if entry["legacy"] else markdown(doc,settings)
+            md = (source / "report.md").read_text() if entry["legacy"] else markdown(doc,settings,documents=documents)
             legacy_body = md
             if legacy_body.startswith("---\n") and "\n---" in legacy_body[4:]:
                 legacy_body = legacy_body.split("\n---", 1)[1].lstrip()
@@ -132,7 +155,7 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
             if legacy_body.startswith("# "):
                 legacy_body = legacy_body.split("\n", 1)[-1].lstrip()
             legacy_html = Markup(MARKDOWN.render(legacy_body)) if entry["legacy"] else None
-            view = report_view(doc, day,settings)
+            view = report_view(doc, day,settings,documents=documents)
             daily_toc = [{"label": "本期新闻", "anchor": "daily-report", "sections": view["sections"]}]
             if legacy_html:
                 # Add stable anchors to original Markdown headings without changing downloads.
@@ -186,7 +209,7 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
             link = settings.base_url + "/daily/" + entry["day"] + "/"
             for key, value in {"title": entry["title"], "link": link, "guid": link, "description": entry["summary"]}.items():
                 SubElement(item, key).text = value
-            doc = store.document(entry["day"])
+            doc = documents[entry["day"]]
             SubElement(item, "pubDate").text = format_datetime(datetime.fromisoformat(doc["generated_at"]))
         (release / "feed.xml").write_bytes(tostring(rss, encoding="utf-8", xml_declaration=True))
         for edition in editions:
@@ -198,15 +221,23 @@ def build(settings: Settings, store: Store, now: float | None = None) -> dict:
                 if item.findtext("link", "") not in allowed:
                     ch.remove(item)
             (release / ("feed-" + edition["id"] + ".xml")).write_bytes(tostring(feed, encoding="utf-8", xml_declaration=True))
-        (release / "robots.txt").write_text("User-agent: *\nDisallow: /downloads/\n")
-        link = settings.web / (".current-" + uuid.uuid4().hex)
-        link.symlink_to(release.relative_to(settings.web), target_is_directory=True)
-        os.replace(link, settings.web / "current")
+        (release / "robots.txt").write_text("User-agent: *\nDisallow: /downloads/\nDisallow: /search.json\n")
+        from .publication import write_manifest, matches_current
+        version = write_manifest(release)
+        changed = not matches_current(settings, version)
+        if changed:
+            link = settings.web / (".current-" + uuid.uuid4().hex)
+            link.symlink_to(release.relative_to(settings.web), target_is_directory=True)
+            os.replace(link, settings.web / "current")
     except BaseException:
         shutil.rmtree(release, ignore_errors=True)
         raise
     # Keep one complete release. Old builds must not bypass data retention.
+    active = (settings.web / 'current').resolve()
     for old in (settings.web / "releases").iterdir():
-        if old != release:
+        if old != active:
             shutil.rmtree(old)
-    return {"editions": len(entries), "release": release.name}
+    # A crash after switching current will cause the next cleanup to rebuild once.
+    atomic_json(settings.data / 'site-inputs.json', {
+        'release': active.name, 'inputs': render_inputs(settings, entries, today)})
+    return {"editions": len(entries), "release": active.name, "version": version, "changed": changed}

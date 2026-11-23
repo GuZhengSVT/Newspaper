@@ -76,6 +76,8 @@ def news_message(settings, documents: list[tuple[str,dict]], subject: str, *, no
                 meta=article['time']
                 if article.get('importance'):meta+=' · '+article['importance']+' · 可靠性 '+article['reliability']
                 if article['follow_up']:meta+=' · 进展'
+                for label in article['evidence_labels']:
+                    meta+=' · '+label
                 block(meta,'i')
                 if bilingual:
                     for pair in article['bilingual_paragraphs']:

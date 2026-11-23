@@ -1,6 +1,8 @@
 PYTHON ?= .venv/bin/python
+REF ?= HEAD
+RELEASE_DIR ?= dist
 
-.PHONY: install test check check-node
+.PHONY: install test check check-node release
 install: check-node
 	python3 -m venv .venv
 	.venv/bin/pip install -r requirements.lock
@@ -21,3 +23,6 @@ check: check-node
 	node --check scripts/image.mjs
 	node --check static/site.js
 	$(PYTHON) scripts/check_profile.py
+
+release:
+	python3 scripts/package-release.py --ref "$(REF)" --output "$(RELEASE_DIR)"

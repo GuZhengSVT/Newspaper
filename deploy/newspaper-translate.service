@@ -1,0 +1,23 @@
+[Unit]
+Description=Resume pending translations of published Newspaper articles
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=newspaper
+Group=newspaper
+WorkingDirectory=/opt/Newspaper
+Environment=NEWSPAPER_CONFIG=/etc/newspaper/config.toml
+EnvironmentFile=/etc/newspaper/credentials.env
+ExecStart=/opt/Newspaper/.venv/bin/python -m newspaper.cli translate --pending
+TimeoutStartSec=2min
+SuccessExitStatus=75
+MemoryMax=256M
+Nice=10
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/newspaper /srv/newspaper

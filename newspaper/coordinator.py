@@ -8,21 +8,29 @@ from .model import Model
 
 class Coordinator:
     def __init__(self, settings, edition, window, worker):
-        self.model = Model(settings, role='manager', group_id=edition.get('group_id', edition['id']))
+        self.model = None
+        if settings.values['model'].get('coordination', 'model') == 'model':
+            self.model = Model(settings, role='manager', group_id=edition.get('group_id', edition['id']),
+                               store=worker.store)
         self.bind(settings, edition, window, worker)
 
     def bind(self, settings, edition, window, worker):
         """Reuse this board's coordinator for its next serial publication window."""
-        if self.model.group_id != edition.get('group_id', edition['id']):
+        if self.model is not None and self.model.group_id != edition.get('group_id', edition['id']):
             raise ValueError('A coordinator cannot manage another board')
         self.settings = settings
         self.edition = edition
         self.window = window
         self.worker = worker
-        self.model.usage = worker.usage
+        if self.model is not None:
+            self.model.usage = worker.usage
+            self.model.edition_key = worker.edition_key
         self.state = {}
 
     def start(self):
+        if self.model is None:
+            self.state = {'mode': 'configured'}
+            return
         scope_limit = max(80, 4000 // max(1, len(self.settings.sections)))
         plan = self.model.request('coordinate', {
             'phase': 'delegate', 'board': self.edition.get('group_id', self.edition['id']),
@@ -43,6 +51,7 @@ class Coordinator:
         self.worker.delegation = json.dumps(briefs, ensure_ascii=False)
 
     def approve(self, doc, metrics):
+        if self.model is None:return None
         if self.state.get('approved'):return None
         articles = [a for section in doc['sections'] for a in section['articles']]
         decision = self.model.request('coordinate', {

@@ -7,7 +7,7 @@ from fixtures import NewspaperCase
 from newspaper.pipeline import generate
 from newspaper.storage import Store
 from newspaper.translation import (legacy_sentence_units, paragraph_pairs, sentence_units,
-                                   translate, validate_bilingual, validate_dates)
+                                   resume_translations, translate, validate_bilingual, validate_dates)
 
 class TranslationRecoveryTests(NewspaperCase):
     def article(self, text):
@@ -102,3 +102,79 @@ class TranslationRecoveryTests(NewspaperCase):
         self.assertFalse(checkpoint.exists())
         metrics = json.loads(self.store.db.execute('select metrics from runs order by id desc limit 1').fetchone()[0])
         self.assertTrue(metrics['resumed_translation'])
+
+    def test_chinese_first_preserves_partial_translation_across_failed_rebuild(self):
+        self.settings.values['translation'] = {'enabled': True, 'publish': 'chinese_first'}
+        second = copy.deepcopy(self.doc['sections'][0]['articles'][0])
+        second.update(event_key='fixture|second|event', title='另一则事件')
+        second['facts'][0]['text'] = '另一项离线测试。'
+        self.doc['sections'][0]['articles'].append(second)
+        now = datetime.fromisoformat(self.day + 'T12:05:00+08:00')
+        with patch('newspaper.pipeline.utcnow', return_value=now), \
+             patch('newspaper.pipeline.gather', return_value={'sources': [self.source]}), \
+             patch('newspaper.pipeline.Model.request', side_effect=[self.doc, {'ok': True}]) as model:
+            self.assertEqual(generate(self.settings, self.store, notify=False)['state'], 'published')
+        self.assertEqual([call.args[0] for call in model.call_args_list], ['edit', 'review'])
+        self.store.db.execute("INSERT INTO deliveries(day,channel,state) VALUES(?,'email','sent')", (self.day,))
+        self.store.db.commit()
+        draft = {'title_en': 'Second article', 'sentences': [{'id': 0, 'en': 'Another offline fixture.'}]}
+        with patch('newspaper.model.Model.request', side_effect=[{}, draft]), \
+             patch('newspaper.publish.build', side_effect=OSError('build interrupted')):
+            with self.assertRaises(OSError):
+                resume_translations(self.settings, self.store)
+        saved = self.store.document(self.day)['sections'][0]['articles']
+        self.assertNotIn('bilingual', saved[0])
+        self.assertEqual(saved[1]['bilingual']['title_en'], 'Second article')
+        with patch('newspaper.model.Model.request') as model:
+            result = resume_translations(self.settings, self.store)
+        self.assertTrue(result['rebuilt'])
+        self.assertEqual(result['translated_articles'], 0)
+        self.assertEqual(result['deferred'], 1)
+        model.assert_not_called()
+        self.assertEqual(self.store.db.execute('SELECT state FROM deliveries').fetchone()[0], 'sent')
+
+    def test_model_tokens_are_shared_by_manager_worker_and_translation(self):
+        import httpx
+        from newspaper.model import Model, ModelBudgetReached, model_usage
+
+        self.settings.values['model']['max_tokens_per_edition'] = 10
+        request = httpx.Request('POST', 'https://example.test/v1/chat/completions')
+        response = httpx.Response(200, request=request, json={
+            'usage': {'total_tokens': 11},
+            'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]})
+        with patch.dict('os.environ', {'NEWSPAPER_API_KEY': 'fixture'}), \
+             patch('newspaper.model.httpx.Client') as factory:
+            post = factory.return_value.__enter__.return_value.post
+            post.return_value = response
+            Model(self.settings, role='manager', store=self.store, edition_key=self.day).request('coordinate', {})
+            for stage in ('edit', 'translate'):
+                with self.assertRaises(ModelBudgetReached):
+                    Model(self.settings, store=self.store, edition_key=self.day).request(stage, {})
+            post.assert_called_once()
+        self.assertEqual(model_usage(self.settings, self.store), [
+            {'day': self.day, 'total_tokens': 11, 'unreported_calls': 0, 'limit': 10, 'blocked': True}])
+
+    def test_provider_cooldown_deferrals_do_not_count_as_failed_probes(self):
+        import httpx
+        from newspaper.alerts import incidents
+        from newspaper.model import Model, ModelDeferred, model_usage
+
+        request = httpx.Request('POST', 'https://example.test/v1/chat/completions')
+        unavailable = httpx.Response(503, request=request, headers={'Retry-After': '120'})
+        with patch.dict('os.environ', {'NEWSPAPER_API_KEY': 'fixture'}), \
+             patch('newspaper.model.httpx.Client') as factory, patch('newspaper.model.time.sleep') as sleep:
+            post = factory.return_value.__enter__.return_value.post
+            post.return_value = unavailable
+            for pending in range(3):
+                with self.assertRaises(httpx.HTTPStatusError):
+                    Model(self.settings, store=self.store, edition_key=self.day).request('plan', {})
+                with self.assertRaises(ModelDeferred):
+                    Model(self.settings, store=self.store, edition_key=self.day).request('plan', {})
+                self.assertEqual(post.call_count, pending + 1)
+                self.store.db.execute('UPDATE model_backoff SET retry_at=0')
+                self.store.db.commit()
+            sleep.assert_not_called()
+        self.assertEqual(model_usage(self.settings, self.store)[0]['unreported_calls'], 3)
+        [(incident, body)] = incidents(self.store, 0)
+        self.assertTrue(incident.startswith('model:'))
+        self.assertIn('HTTP 503', body)

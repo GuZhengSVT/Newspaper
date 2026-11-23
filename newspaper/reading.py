@@ -7,6 +7,12 @@ from zoneinfo import ZoneInfo
 
 from .config import TZ
 
+EVIDENCE_LABELS = {
+    'official_statement': '官方陈述',
+    'single_source': '单一来源报道',
+    'corroborated': '独立多源核实',
+}
+
 SOURCE_NAMES = {
     'prtimes.jp': 'PR TIMES', 'xinhuanet.com': '新华社', 'news.cn': '新华社',
     'gov.cn': '中国政府网', 'cas.cn': '中国科学院', 'nature.com': 'Nature',
@@ -29,7 +35,25 @@ def display_time(value: str, pattern: str = '%m月%d日 %H:%M', timezone=TZ) -> 
     return moment.astimezone(timezone).strftime(pattern)
 
 
-def report_view(doc: dict, key: str, settings=None) -> dict:
+def prior_article_links(article: dict, documents: dict | None) -> list[dict]:
+    links = []
+    for link in article.get('event_links', []):
+        prior = (documents or {}).get(link['edition'])
+        if prior is None:
+            continue
+        prefix = prior.get('edition', 'daily')
+        for section_index, section in enumerate(prior.get('sections', []), 1):
+            for article_index, old in enumerate(section['articles'], 1):
+                if old['event_key'] != link['event_key']:
+                    continue
+                anchor = f'{prefix}-s{section_index}-a{article_index}'
+                links.append({'url': '/daily/' + link['edition'] + '/#' + anchor,
+                              'label': '此前报道' if link['kind']=='progress' else '相关报道',
+                              'title': old['title']})
+    return links
+
+
+def report_view(doc: dict, key: str, settings=None, *, documents: dict | None = None) -> dict:
     timezone=ZoneInfo(settings.values.get('project',{}).get('timezone',TZ.key)) if settings else TZ
     sources = {s['id']: s for s in doc.get('sources', [])}
     prefix = doc.get('edition', 'daily')
@@ -56,7 +80,12 @@ def report_view(doc: dict, key: str, settings=None) -> dict:
                 paragraphs=[' '.join(paragraphs[i:i+size]) for i in range(0,len(paragraphs),size)]
             paragraphs=paragraphs or [article['summary']]
             from .translation import paragraph_pairs
-            articles.append({**article, 'anchor': f'{prefix}-s{si}-a{ai}',
+            modes = {f.get('verification', article.get('verification')) for f in article['facts']
+                     if f.get('kind', 'fact') == 'fact'}
+            if not modes:
+                modes = {article.get('verification')}
+            articles.append({**article, 'evidence_labels': [label for mode, label in EVIDENCE_LABELS.items() if mode in modes],
+                'prior_articles': prior_article_links(article, documents), 'anchor': f'{prefix}-s{si}-a{ai}',
                 'paragraphs': paragraphs, 'bilingual_paragraphs': paragraph_pairs(article,paragraphs) if article.get('bilingual') else [],
                 'references': list(references.values()),
                 'time': display_time(article['published_at'],timezone=timezone)})

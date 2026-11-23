@@ -36,8 +36,11 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
             raise ValueError("Unknown or modified source URL")
         source_url(item["url"])
     start, end = (datetime.fromisoformat(window[k]) for k in ["window_start", "window_end"])
-    historical = {normalize(e["id"]) for e in history}
-    seen = set()
+    historical = {normalize(e["id"]) for e in history if e.get("same_task", True)}
+    seen = []
+    seen_keys = set()
+    urls = {s["id"]: s["url"] for s in sources}
+    from .events import same_article_event
     for section in doc["sections"]:
         configured = next(s for s in settings.sections if s['id']==section['id'])
         rules = configured.get('filter', {})
@@ -57,16 +60,24 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
             if moment.tzinfo is None or not start <= moment < end:
                 raise ValueError("Article is outside the edition's reporting window")
             identity = normalize(article["event_key"])
-            if identity in seen:
+            if identity in seen_keys or (doc.get('schema_version') == 2
+                                         and any(same_article_event(article, old, urls) for old in seen)):
                 raise ValueError("Duplicate event in the same edition")
-            if identity in historical and not article["follow_up"]:
+            previous = article.get('event_links', [])
+            if previous and (previous[0]['kind'] == 'progress') != article['follow_up']:
+                raise ValueError("Event link does not match the article's follow-up status")
+            repeated = identity in historical or any(link['same_task'] for link in previous)
+            if repeated and not article["follow_up"]:
                 raise ValueError("Previously reported event is missing a substantive follow-up")
             if article["follow_up"] and not article["new_facts"].strip():
                 raise ValueError("Follow-up needs explicit new facts")
-            seen.add(identity)
+            seen.append(article)
+            seen_keys.add(identity)
             if doc.get("schema_version") == 2 and article["reliability"] == "A" and article["verification"] == "single_source":
                 raise ValueError("A reliability requires primary authority or independent corroboration")
             referenced = set()
+            reused_sources = set()
+            current_core_sources = set()
             for fact in article["facts"]:
                 mode = fact.get("verification", article["verification"])
                 if (doc.get("schema_version") == 2 and article["reliability"] == "A"
@@ -83,7 +94,16 @@ def validate_report(doc: dict, settings: Settings, sources: list[dict], history:
                         raise ValueError("Fact cites an unknown source")
                     if normalize(evidence["quote"]) not in normalize(source_map[sid]["content"]):
                         raise ValueError("Evidence quotation was not found in the fetched source")
+                    source = source_map[sid]
+                    if source.get('prior_edition'):
+                        if normalize(source['prior_event_key']) != identity:
+                            raise ValueError("Retained evidence belongs to a different event")
+                        reused_sources.add(sid)
+                    elif fact.get('kind', 'fact') == 'fact':
+                        current_core_sources.add(sid)
                     referenced.add(sid)
+            if reused_sources and not current_core_sources:
+                raise ValueError("Reused evidence requires current support for the core news")
             if article["verification"] == "corroborated" and len(referenced) < 2:
                 raise ValueError("Corroboration requires at least two source records")
             image=article.get('image')

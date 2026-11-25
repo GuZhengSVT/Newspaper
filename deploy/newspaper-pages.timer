@@ -1,0 +1,10 @@
+[Unit]
+Description=Check whether the daily Newspaper edition is ready for GitHub Pages
+
+[Timer]
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+Unit=newspaper-pages.service
+
+[Install]
+WantedBy=timers.target

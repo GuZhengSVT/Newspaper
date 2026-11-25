@@ -23,7 +23,7 @@ Pages 的构建任务从 HTTPS 源站下载本次清单中的文件，逐文件�
    ref = "main"
    ```
 
-4. 从旧的 Git 分支同步方案迁移时，安排切换窗口，停用原 `newspaper-pages.path` 和旧同步服务，再按新的发布包安装步骤启用 `newspaper-publish.timer`。首次升级先执行 `build` 生成清单。也可以使用 `publish-site` 单独检查或触发发布。
+4. 从 Git 分支同步方案迁移时，安排切换窗口，停用 `newspaper-pages.timer`（旧安装使用 `newspaper-pages.path`）和分支同步服务，再按新的发布包安装步骤启用 `newspaper-publish.timer`。首次升级先执行 `build` 生成清单。也可以使用 `publish-site` 单独检查或触发发布。
 5. Pages 工作流把内容版本和本次请求编号写入 `site-deployment.json`。VPS 在读者域名读回两者才确认成功；即使更正后恢复了旧内容，也会等对应的发布完成。下一轮推送只发送与已确认的公开 JSON 一致的刊物。域名尚未生效、工作流失败或取回文件时源站版本变化，都可以等下一轮继续，无需重新采编。工作流已派发后，程序按分钟检查公网，15 分钟仍未确认可重新派发。相同且已确认的版本在本地直接返回。
 
 工作流将上传产物保留期设为一天。新闻下架由包含删除结果的新部署生效，远端不可用期间可能仍显示上一次成功版本。既有仓库的提交历史由站点所有者管理。有关部署环境和所需的工作流权限，参见 [GitHub Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
@@ -32,7 +32,9 @@ Pages 的构建任务从 HTTPS 源站下载本次清单中的文件，逐文件�
 
 对于已经由 GitHub Pages 从分支根目录发布的站点，可保留该分支和自定义域名。在运行配置中填写读者使用的 HTTPS `base_url`，将 `publication.mode` 设为 `"pages_branch"`，填写站点仓库 `repository` 和分支 `ref`。
 
-在已有的站点仓库工作区根目录运行 `python3 /安装目录/scripts/sync-pages-branch.py --branch main`。发布机需要 Git、rsync 和该仓库的推送权限。由 systemd 监听网站目录的原子切换并启动此命令，配置失败重试。命令同步网站生成的路径，保留仓库的 CNAME、README 和 Pages 设置，并随同一提交写入版本回执。
+发布机需要 Git、rsync 和站点仓库的推送权限。将已有站点仓库根目录设为 `newspaper-pages.service` 的工作目录，运行 `/安装目录/.venv/bin/python /安装目录/scripts/sync-pages-branch.py --branch main --daily`，并启用 `deploy/newspaper-pages.timer`。旧安装需停用 `newspaper-pages.path`。
+
+通过 systemd drop-in 将 `newspaper.service` 的生产命令设为 `python -m newspaper.cli run --daily-clean`，并停用独立的 `newspaper-clean.timer`。生产任务从项目时区的 12:00 开始，在同一把任务锁内先完成当日清理，再处理排定的刊物。可将 `newspaper-translate.timer` 的运行时段也从 12:00 开始。分支同步等待清理、当天所有排定的刊物及其待办翻译完成，再一次性推送站点。同步会保留仓库的 CNAME、README 和 Pages 设置，并随提交写入版本回执。
 
 启用 `newspaper-publish.timer`，由程序从读者域名读取这次发布的回执。通知任务会等待回执，并核对即将发送的刊物与已公布的内容摘要。暂停通知期间通过 `run --no-notify` 生产的刊物仍然跳过投递。
 

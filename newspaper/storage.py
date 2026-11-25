@@ -66,10 +66,15 @@ def lock(settings: Settings, wait_seconds: float = 0):
 
 
 class Store:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, read_only: bool = False):
         self.settings = settings
+        database = settings.data / "newspaper.sqlite"
+        if read_only:
+            self.db = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
+            self.db.row_factory = sqlite3.Row
+            return
         settings.prepare()
-        self.db = sqlite3.connect(settings.data / "newspaper.sqlite")
+        self.db = sqlite3.connect(database)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
           PRAGMA foreign_keys=ON;

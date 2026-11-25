@@ -12,7 +12,7 @@ from .config import CONFIG_VERSION, ROOT, ConfigError, Settings, release_info
 from .notify import deliver, readiness
 from .pipeline import generate, import_legacy
 from .publish import build
-from .retention import clean
+from .retention import clean, clean_daily
 from .storage import Store, lock
 from .alerts import COMMANDS, record_command, process_failure_alerts
 
@@ -56,6 +56,7 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="Generate and publish to the configured site")
     run.add_argument("--no-notify", action="store_true", help="Publish to the configured site without notifications")
+    run.add_argument("--daily-clean", action="store_true", help="Start at local noon and complete cleanup once before production")
     preview = commands.add_parser("preview", help="Generate into a new private directory without publishing or notifying")
     preview.add_argument("--output", type=Path, required=True, help="New directory for preview data and website")
     for command in (run, preview):
@@ -125,11 +126,20 @@ def main() -> int:
                       "base_url": settings.base_url}
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result["node"] and result["dsh_installed"] and result["model_configured"] else 1
-        # The daily run must not be lost when the noon cleanup starts first.
+        clean_day = None
+        if args.command == "run" and args.daily_clean:
+            now = datetime.now(settings.timezone)
+            if now.hour < 12:
+                print(json.dumps({"state": "before_scheduled_window", "date": now.date().isoformat()}))
+                return 0
+            clean_day = now.date()
+        # The daily run must not be lost when a maintenance job holds the lock.
         with lock(settings, wait_seconds=90 if args.command == "run" else 0):
             store = Store(settings)
             try:
                 if args.command == "run":
+                    if clean_day is not None:
+                        clean_daily(settings, store, clean_day)
                     result = generate(settings, store, notify=not args.no_notify, cutoff=args.cutoff,
                                       manual=args.manual,task_id=args.task)
                 elif args.command == "build":

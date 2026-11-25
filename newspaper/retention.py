@@ -9,6 +9,22 @@ from .publish import build, render_inputs
 from .storage import Store, expiry, utcnow
 
 
+DAILY_CLEAN_DATE = 'daily-clean-date'
+
+
+def daily_cleanup_done(settings: Settings, day: date) -> bool:
+    try:
+        return (settings.data / DAILY_CLEAN_DATE).read_text() == day.isoformat()
+    except FileNotFoundError:
+        return False
+
+
+def clean_daily(settings: Settings, store: Store, day: date) -> None:
+    if not daily_cleanup_done(settings, day):
+        clean(settings, store)
+        (settings.data / DAILY_CLEAN_DATE).write_text(day.isoformat())
+
+
 def clean(settings: Settings, store: Store, now: float | None = None) -> dict:
     now = utcnow().timestamp() if now is None else now
     expired = [row[0] for row in store.db.execute("SELECT day FROM editions WHERE expires_at<=?", (now,))]

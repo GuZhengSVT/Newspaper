@@ -1,9 +1,12 @@
 """Publish generated files to an existing GitHub Pages branch checkout."""
 import argparse
+import fcntl
 import hashlib
 import json
 import re
 import subprocess
+import sys
+from datetime import datetime, time
 from pathlib import Path
 
 
@@ -18,28 +21,33 @@ def generated(name):
             or bool(re.fullmatch(r'feed-[a-z0-9-]+\.xml', root)))
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--web', type=Path, default=Path('/srv/newspaper'))
-    parser.add_argument('--branch', default='main')
-    args = parser.parse_args()
-    repo = Path.cwd()
-
+def sync(repo, web, branch, day=None):
     def git(*arguments):
         return subprocess.check_output(['git', *arguments], text=True, timeout=120).strip()
 
-    if Path(git('rev-parse', '--show-toplevel')) != repo or git('branch', '--show-current') != args.branch:
+    if Path(git('rev-parse', '--show-toplevel')) != repo or git('branch', '--show-current') != branch:
         raise ValueError('Run in the root of the checked-out Pages branch')
-    current = args.web / 'current'
+    current = web / 'current'
     source = current.resolve(strict=True)
-    if source.parent != (args.web / 'releases').resolve() or not re.fullmatch('[a-f0-9]{32}', source.name):
+    if source.parent != (web / 'releases').resolve() or not re.fullmatch('[a-f0-9]{32}', source.name):
         raise ValueError('Expected an atomic Newspaper release')
     marker = Path(git('rev-parse', '--absolute-git-dir')) / 'newspaper-pushed-release'
     if marker.exists() and marker.read_text() == source.name + ' ' + git('rev-parse', 'HEAD'):
         return
 
-    git('fetch', 'origin', args.branch)
-    git('merge', '--ff-only', 'refs/remotes/origin/' + args.branch)
+    remote_ref = 'refs/remotes/origin/' + branch
+    day_stamp = f'Newspaper-Date: {day}' if day else None
+
+    def already_pushed():
+        return day_stamp and git('for-each-ref', '--format=%(refname)', remote_ref) and git(
+            'log', '-1', '--format=%H', '--grep=^' + day_stamp + '$', remote_ref)
+
+    if already_pushed():
+        return
+    git('fetch', 'origin', branch)
+    if already_pushed():
+        return
+    git('merge', '--ff-only', remote_ref)
     manifest = (source / 'site-manifest.json').read_bytes()
     version = (source / 'site-version.txt').read_text().strip()
     files = json.loads(manifest)
@@ -79,10 +87,70 @@ def main():
     names = sorted(managed)
     git('add', '-A', '--', *names)
     if git('diff', '--cached', '--name-only', '--', *names):
-        git('commit', '--only', '-m', 'Publish Newspaper site ' + version[:12], '--', *names)
-    git('push', 'origin', 'HEAD:refs/heads/' + args.branch)
+        subject = ['-m', 'Publish Newspaper site ' + version[:12]]
+        if day_stamp:
+            subject += ['-m', day_stamp]
+        git('commit', '--only', *subject, '--', *names)
+    git('push', 'origin', 'HEAD:refs/heads/' + branch)
     marker.write_text(source.name + ' ' + git('rev-parse', 'HEAD'))
     print('Published', version, 'from', source.name)
+
+
+def daily_sync(repo, branch):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from newspaper.config import Settings
+    from newspaper.retention import daily_cleanup_done
+    from newspaper.schedule import jobs
+    from newspaper.storage import Store
+
+    settings = Settings.load()
+    publication = settings.values.get('publication', {})
+    if publication.get('mode') != 'pages_branch' or publication.get('ref', 'main') != branch:
+        raise ValueError('Daily sync requires the configured Pages branch')
+    if not settings.sections:
+        return
+    try:
+        pipeline_lock = (settings.data / 'pipeline.lock').open('r')
+    except FileNotFoundError:
+        return
+    with pipeline_lock:
+        try:
+            fcntl.flock(pipeline_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        today = datetime.now(settings.timezone).date()
+        if not daily_cleanup_done(settings, today):
+            return
+        day = today.isoformat()
+        end_of_day = datetime.combine(today, time.max, settings.timezone)
+        scheduled = [(job, window) for job, window in jobs(settings, end_of_day) if window['date'] == day]
+        if not scheduled or not (settings.data / 'newspaper.sqlite').is_file():
+            return
+        store = Store(settings, read_only=True)
+        try:
+            keys = [store.existing_publication(job, window) for job, window in scheduled]
+            if not all(key and store.published(key) for key in keys):
+                return
+            if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='pending_translations'").fetchone():
+                pending = {row[0] for row in store.db.execute('SELECT day FROM pending_translations')}
+                if pending.intersection(keys):
+                    return
+        finally:
+            store.close()
+        sync(repo, settings.web, branch, day)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    web = parser.add_mutually_exclusive_group()
+    web.add_argument('--web', type=Path)
+    web.add_argument('--daily', action='store_true', help='Push once after all scheduled editions and translations are ready')
+    parser.add_argument('--branch', default='main')
+    args = parser.parse_args()
+    if args.daily:
+        daily_sync(Path.cwd(), args.branch)
+    else:
+        sync(Path.cwd(), args.web or Path('/srv/newspaper'), args.branch)
 
 
 if __name__ == '__main__':
